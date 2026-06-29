@@ -1,0 +1,40 @@
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+build/
+.packages
+pubspec.lock
+
+# iOS
+client/ios/Pods/
+client/ios/.symlinks/
+client/ios/Flutter/Flutter.framework/
+client/ios/Flutter/Flutter.podspec
+client/ios/Runner/GeneratedPluginRegistrant.*
+
+# Android
+client/android/.gradle/
+client/android/local.properties
+client/android/build/
+client/android/app/build/
+client/android/captures/
+*.iml
+
+# Web
+client/web/build/
+
+# Provability artifacts produced locally (not tracked; releases are tagged)
+provability/reproducible-build/out/
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Harness-local state (not for upstream)
+.claude/

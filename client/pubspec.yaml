@@ -1,0 +1,12 @@
+name: opaqueshare
+description: Privacy-first, zero-knowledge file transfer client.
+publish_to: none
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+dependencies:
+  flutter: { sdk: flutter }
+  sodium_libs: ^3.0.0          # libsodium: sealed boxes + secretstream
+  flutter_secure_storage: ^9.0.0
+  http: ^1.2.0
+dev_dependencies:
+  flutter_test: { sdk: flutter }
