@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../api/api_client.dart';
 import 'auth_providers.dart';
+import 'auth_repository.dart';
 
 class TotpChallengeScreen extends ConsumerStatefulWidget {
   const TotpChallengeScreen({super.key, required this.mfaSession});
@@ -37,13 +38,26 @@ class _TotpChallengeScreenState extends ConsumerState<TotpChallengeScreen> {
     });
     try {
       final repo = await ref.read(authRepositoryProvider.future);
-      final session = await repo.loginTotp(
+      final outcome = await repo.loginTotp(
         mfaSession: widget.mfaSession,
         code: _code.text.trim(),
         isRecovery: _useRecovery,
       );
-      await ref.read(authSessionProvider.notifier).setSession(session);
-      if (mounted) context.go('/');
+      // TOTP is stage 2 of password login, so the outcome is always
+      // the tokens branch — the API contract guarantees it.
+      if (outcome is! LoginOutcomeTokens) {
+        setState(() => _error = 'Unexpected server response.');
+        return;
+      }
+      await ref
+          .read(authSessionProvider.notifier)
+          .setSession(outcome.session);
+      if (!mounted) return;
+      if (!outcome.emailVerified) {
+        context.go('/verify-email?user_id=${outcome.session.userId}');
+      } else {
+        context.go('/');
+      }
     } on ApiException catch (exc) {
       setState(() => _error = exc.message);
     } finally {

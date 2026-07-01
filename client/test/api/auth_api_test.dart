@@ -54,4 +54,51 @@ void main() {
       expect(captured.containsKey('user_id'), isFalse);
     });
   });
+
+  group('/v1/auth/password-reset', () {
+    test('requestPasswordReset posts {email}', () async {
+      when(
+        () => client.post(any(), body: any(named: 'body'), authed: any(named: 'authed')),
+      ).thenAnswer((_) async => <String, dynamic>{'sent': true});
+
+      await api.requestPasswordReset(email: 'alice@example.com');
+
+      final captured = verify(
+        () => client.post(
+          '/v1/auth/password-reset/request',
+          body: captureAny(named: 'body'),
+        ),
+      ).captured.single as Map<String, dynamic>;
+      expect(captured, {'email': 'alice@example.com'});
+    });
+
+    test('confirmPasswordReset posts {user_id, token, new_password}',
+        () async {
+      when(
+        () => client.post(any(), body: any(named: 'body'), authed: any(named: 'authed')),
+      ).thenAnswer((_) async => <String, dynamic>{'ok': true});
+
+      await api.confirmPasswordReset(
+        userId: 'u-42',
+        token: 'reset-token-value',
+        newPassword: 'brand-new-pw',
+      );
+
+      final captured = verify(
+        () => client.post(
+          '/v1/auth/password-reset/confirm',
+          body: captureAny(named: 'body'),
+        ),
+      ).captured.single as Map<String, dynamic>;
+      expect(captured, {
+        'user_id': 'u-42',
+        'token': 'reset-token-value',
+        'new_password': 'brand-new-pw',
+      });
+      // Belt-and-braces: the client MUST NOT accidentally include
+      // the current password (there is no "current password" here —
+      // the reset link is the auth).
+      expect(captured.containsKey('password'), isFalse);
+    });
+  });
 }
