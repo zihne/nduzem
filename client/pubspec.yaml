@@ -1,12 +1,40 @@
 name: opaqueshare
 description: Privacy-first, zero-knowledge file transfer client.
 publish_to: none
+
+# Version scheme: MAJOR.MINOR.PATCH+BUILD. BUILD is a monotonic counter that
+# store submissions bump so the same source can be re-signed without a version
+# regression. See docs/adr/0001-client-architecture.md.
+version: 0.1.0+1
+
 environment:
   sdk: ">=3.4.0 <4.0.0"
+  flutter: ">=3.24.0"
+
 dependencies:
   flutter: { sdk: flutter }
-  sodium_libs: ^3.0.0          # libsodium: sealed boxes + secretstream
-  flutter_secure_storage: ^9.0.0
-  http: ^1.2.0
+
+  # State: Riverpod without codegen — smaller build, faster iteration for M1.
+  # A future milestone can add riverpod_generator when the provider surface grows.
+  flutter_riverpod: ^2.6.1
+
+  # Declarative routing + deep-link handling for the email-verification link.
+  go_router: ^14.6.2
+
+  # libsodium (X25519, Ed25519, secretstream, crypto_box_seal). One line of
+  # Dart, one FFI call per primitive — the crypto stack the spec targets.
+  sodium_libs: ^3.4.4
+
+  # Hardware-backed keystore. Private keys never leave here.
+  flutter_secure_storage: ^9.2.2
+
+  # HTTP. Small enough that the M1 auth path doesn't need dio.
+  http: ^1.2.2
+
+  # For SHA-256 used in the safety-number / fingerprint helper.
+  crypto: ^3.0.6
+
 dev_dependencies:
   flutter_test: { sdk: flutter }
+  flutter_lints: ^5.0.0
+  mocktail: ^1.0.4
