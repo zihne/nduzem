@@ -34,6 +34,15 @@ dependencies:
   # For SHA-256 used in the safety-number / fingerprint helper.
   crypto: ^3.0.6
 
+  # Launch `otpauth://` URLs so the OS routes to the installed
+  # authenticator app (fixes same-device MFA enrolment — the QR path
+  # only works when the authenticator is on a separate device).
+  url_launcher: ^6.3.1
+
+  # QR rendering. Used by the MFA enrolment screen so users with an
+  # authenticator on a separate device can point-and-scan.
+  qr_flutter: ^4.1.0
+
 dev_dependencies:
   flutter_test: { sdk: flutter }
   flutter_lints: ^5.0.0

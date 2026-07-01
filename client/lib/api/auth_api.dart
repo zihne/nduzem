@@ -70,7 +70,10 @@ class AuthApi {
       body: {
         'mfa_session': mfaSession,
         'code': code,
-        'is_recovery': isRecovery,
+        // Server field is `is_recovery_code` per LoginTotpRequest;
+        // sending `is_recovery` would be silently ignored (Pydantic
+        // extra=ignore) and recovery-code logins would fail.
+        'is_recovery_code': isRecovery,
       },
     );
     return LoginResult.tokens(
@@ -147,26 +150,35 @@ class AuthApi {
     );
   }
 
-  /// Enrol TOTP: authed call returns a base32 secret + otpauth URI +
-  /// one-time recovery codes. The recovery codes are shown ONCE to the user
-  /// and never returned again.
+  /// Stage 1 of MFA enrolment. Server returns the base32 secret and its
+  /// `otpauth://…` URL; the user scans / types the secret into an
+  /// authenticator app. `mfa_enabled` stays false on the user row until
+  /// [mfaEnrollConfirm] succeeds.
+  ///
+  /// Recovery codes are **not** returned here — the server hands them
+  /// out once at confirm time (see [MfaEnrollConfirmResult]).
   Future<TotpEnrollment> mfaEnrollBegin() async {
     final body = await _client.post('/v1/auth/mfa/enroll/begin', authed: true);
     return TotpEnrollment(
-      secretBase32: body['secret_base32'] as String,
-      otpauthUri: body['otpauth_uri'] as String,
-      recoveryCodes: (body['recovery_codes'] as List<dynamic>)
-          .cast<String>()
-          .toList(),
+      secret: body['secret'] as String,
+      otpauthUrl: body['otpauth_url'] as String,
     );
   }
 
-  /// Confirm enrolment by proving possession of a working TOTP.
-  Future<void> mfaEnrollConfirm({required String code}) async {
-    await _client.post(
+  /// Stage 2 of MFA enrolment. Client proves possession of a valid TOTP;
+  /// server flips `mfa_enabled=true` and hands back the one-time recovery
+  /// codes. The client MUST surface them to the user immediately —
+  /// hashes are stored, plaintexts cannot be retrieved later.
+  Future<MfaEnrollConfirmResult> mfaEnrollConfirm({required String code}) async {
+    final body = await _client.post(
       '/v1/auth/mfa/enroll/confirm',
       body: {'code': code},
       authed: true,
+    );
+    return MfaEnrollConfirmResult(
+      mfaEnabled: body['mfa_enabled'] as bool,
+      recoveryCodes:
+          (body['recovery_codes'] as List<dynamic>).cast<String>().toList(),
     );
   }
 }
@@ -223,13 +235,30 @@ class TokenPair {
   final String refresh;
 }
 
+/// Result of [AuthApi.mfaEnrollBegin]. Recovery codes are NOT included
+/// here — they land in [MfaEnrollConfirmResult] after the user proves
+/// possession of a working TOTP.
 class TotpEnrollment {
   const TotpEnrollment({
-    required this.secretBase32,
-    required this.otpauthUri,
+    required this.secret,
+    required this.otpauthUrl,
+  });
+
+  /// Base32 TOTP shared secret. Also embedded inside [otpauthUrl].
+  final String secret;
+
+  /// `otpauth://totp/…` URL. Render as a QR for one-tap authenticator
+  /// setup, or expose "copy" so the user can paste it into their app.
+  final String otpauthUrl;
+}
+
+/// Result of [AuthApi.mfaEnrollConfirm]. The recovery codes are shown
+/// to the user exactly once — the server stores only their hashes.
+class MfaEnrollConfirmResult {
+  const MfaEnrollConfirmResult({
+    required this.mfaEnabled,
     required this.recoveryCodes,
   });
-  final String secretBase32;
-  final String otpauthUri;
+  final bool mfaEnabled;
   final List<String> recoveryCodes;
 }

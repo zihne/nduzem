@@ -191,7 +191,9 @@ class AuthRepository implements TokenSource {
 
   Future<TotpEnrollment> mfaEnrollBegin() => _api.mfaEnrollBegin();
 
-  Future<void> mfaEnrollConfirm({required String code}) =>
+  /// Returns the one-time recovery codes; the caller MUST surface them
+  /// to the user before navigating away — the server stores only hashes.
+  Future<MfaEnrollConfirmResult> mfaEnrollConfirm({required String code}) =>
       _api.mfaEnrollConfirm(code: code);
 
   // --- sign out ------------------------------------------------------------
