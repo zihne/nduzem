@@ -1,6 +1,7 @@
 import '../../api/api_client.dart';
 import '../../api/auth_api.dart';
 import '../../crypto/fingerprint.dart';
+import '../../crypto/jwt.dart';
 import '../../crypto/keys.dart';
 import '../../storage/secure_storage.dart';
 
@@ -85,18 +86,34 @@ class AuthRepository implements TokenSource {
 
   // --- login / TOTP --------------------------------------------------------
 
-  Future<LoginResult> login({
+  /// Password-only login. Two outcomes:
+  ///   - [LoginOutcomeTokens]: tokens issued; caller should
+  ///     `setSession(outcome.session)` and route based on
+  ///     `outcome.emailVerified` (`true` → `/`, `false` → `/verify-email`).
+  ///   - [LoginOutcomeMfaRequired]: caller must resolve the MFA challenge
+  ///     by calling [loginTotp] with the `mfaSession`.
+  ///
+  /// On the tokens branch, this method has already persisted the tokens +
+  /// user id to secure storage before returning.
+  Future<LoginOutcome> login({
     required String email,
     required String password,
   }) async {
     final result = await _api.login(email: email, password: password);
-    if (result is LoginTokens) {
-      await _persistTokensOnly(access: result.access, refresh: result.refresh);
-    }
-    return result;
+    return switch (result) {
+      LoginMfaRequired(:final mfaSession) =>
+        LoginOutcome.mfaRequired(mfaSession),
+      LoginTokens(:final access, :final refresh, :final emailVerified) =>
+        LoginOutcome.tokens(
+          await _acceptTokens(access: access, refresh: refresh),
+          emailVerified,
+        ),
+    };
   }
 
-  Future<AuthSession> loginTotp({
+  /// Second stage of MFA login. Returns the same [LoginOutcome.tokens]
+  /// shape as [login] so the caller can navigate the same way.
+  Future<LoginOutcome> loginTotp({
     required String mfaSession,
     required String code,
     required bool isRecovery,
@@ -111,8 +128,24 @@ class AuthRepository implements TokenSource {
         'Server returned a non-tokens LoginResult from /login/totp.',
       );
     }
-    await _persistTokensOnly(access: result.access, refresh: result.refresh);
-    final userId = await _storage.read(SecureStore.kUserId) ?? '';
+    return LoginOutcome.tokens(
+      await _acceptTokens(access: result.access, refresh: result.refresh),
+      result.emailVerified,
+    );
+  }
+
+  /// Common tail for both password-only and TOTP logins: persist the
+  /// tokens, decode the user id out of the access JWT's `sub` claim, save
+  /// it, and build an [AuthSession] using whatever fingerprint is already
+  /// on-device (from a prior register on this device). Fingerprint stays
+  /// empty on a fresh install — that's a multi-device concern for M2+.
+  Future<AuthSession> _acceptTokens({
+    required String access,
+    required String refresh,
+  }) async {
+    await _persistTokensOnly(access: access, refresh: refresh);
+    final userId = extractSubject(access);
+    await _storage.write(SecureStore.kUserId, userId);
     final fp = await _storage.read(SecureStore.kFingerprintHex) ?? '';
     return AuthSession(userId: userId, fingerprintHex: fp);
   }
@@ -130,6 +163,29 @@ class AuthRepository implements TokenSource {
 
   Future<void> resendVerification({required String email}) =>
       _api.resendVerification(email: email);
+
+  // --- password reset (M1.7) ----------------------------------------------
+
+  /// Anti-enumeration by design on the server: this always resolves to a
+  /// void success unless the network itself fails. The screen shows a
+  /// generic "if the address exists, check your email" message either way.
+  Future<void> requestPasswordReset({required String email}) =>
+      _api.requestPasswordReset(email: email);
+
+  /// Consumes the single-use reset token. On success, the server has
+  /// already revoked every prior refresh token — but the caller's own
+  /// tokens don't exist yet (unauthenticated flow), so nothing to purge
+  /// locally beyond the standard signed-out state.
+  Future<void> confirmPasswordReset({
+    required String userId,
+    required String token,
+    required String newPassword,
+  }) =>
+      _api.confirmPasswordReset(
+        userId: userId,
+        token: token,
+        newPassword: newPassword,
+      );
 
   // --- MFA enrolment -------------------------------------------------------
 
@@ -208,5 +264,29 @@ class AuthSession {
   const AuthSession({required this.userId, required this.fingerprintHex});
   final String userId;
   final String fingerprintHex;
+}
+
+/// Result of [AuthRepository.login] / [AuthRepository.loginTotp]. Screens
+/// pattern-match on this to decide whether to route to `/`, `/verify-email`,
+/// or `/login/totp`.
+sealed class LoginOutcome {
+  const LoginOutcome();
+
+  const factory LoginOutcome.tokens(AuthSession session, bool emailVerified) =
+      LoginOutcomeTokens;
+
+  const factory LoginOutcome.mfaRequired(String mfaSession) =
+      LoginOutcomeMfaRequired;
+}
+
+final class LoginOutcomeTokens extends LoginOutcome {
+  const LoginOutcomeTokens(this.session, this.emailVerified);
+  final AuthSession session;
+  final bool emailVerified;
+}
+
+final class LoginOutcomeMfaRequired extends LoginOutcome {
+  const LoginOutcomeMfaRequired(this.mfaSession);
+  final String mfaSession;
 }
 

@@ -64,6 +64,15 @@ The M1 flow the client covers end-to-end:
    6-digit prompt. Confirm; land on `/`.
 6. Kill the app, relaunch — the auth session should be restored from
    secure storage without re-prompting.
+7. **Password reset** (M1.7): sign out, tap **Forgot password?** on the
+   login screen, enter your email. You should always see "if an account
+   exists, we sent a reset link" regardless of whether the email exists
+   (anti-enumeration). For a verified account, copy the reset URL from
+   the backend stdout and paste it into your device's browser — the
+   universal-link path is a later milestone; for now the URL opens the
+   app via the router, and you'll be prompted for a new password.
+   Confirm; you should be bounced back to `/login`. Sign in with the
+   new password; the old password should no longer work.
 
 ## Known limitations
 

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -31,7 +32,6 @@ void main() {
     keys = _FakeKeys();
     repo = AuthRepository(api: api, storage: store, keys: keys);
 
-    // Mocktail requires `any()` register-fallback values for custom types.
     registerFallbackValue(Uint8List(0));
 
     when(() => store.write(any(), any())).thenAnswer((_) async {});
@@ -47,6 +47,14 @@ void main() {
         signingPublic: signingPub,
         signingPrivate: signingPriv,
       );
+
+  // Build a JWT whose payload contains `sub: <userId>`. The client only
+  // decodes; the signature doesn't need to be valid.
+  String jwtFor(String userId) {
+    String seg(Map<String, dynamic> m) =>
+        base64Url.encode(utf8.encode(jsonEncode(m))).replaceAll('=', '');
+    return '${seg({'alg': 'HS256'})}.${seg({'sub': userId})}.sig';
+  }
 
   group('register', () {
     test('generates keys, POSTs, persists tokens + keypair', () async {
@@ -76,14 +84,10 @@ void main() {
       expect(session.userId, 'u1');
       expect(session.fingerprintHex.length, 64); // SHA-256 hex
 
-      // Private keys landed in secure storage.
-      verify(
-        () => store.writeBytes(SecureStore.kIdentityPrivate, identityPriv),
-      ).called(1);
-      verify(
-        () => store.writeBytes(SecureStore.kSigningPrivate, signingPriv),
-      ).called(1);
-      // Tokens + user id landed too.
+      verify(() => store.writeBytes(SecureStore.kIdentityPrivate, identityPriv))
+          .called(1);
+      verify(() => store.writeBytes(SecureStore.kSigningPrivate, signingPriv))
+          .called(1);
       verify(() => store.write(SecureStore.kUserId, 'u1')).called(1);
       verify(() => store.write(SecureStore.kAccessToken, 'A')).called(1);
       verify(() => store.write(SecureStore.kRefreshToken, 'R')).called(1);
@@ -91,25 +95,52 @@ void main() {
   });
 
   group('login', () {
-    test('tokens result: persists access + refresh', () async {
+    test(
+        'tokens: persists access + refresh + user_id, returns LoginOutcomeTokens',
+        () async {
+      final access = jwtFor('user-42');
       when(
         () => api.login(
           email: any(named: 'email'),
           password: any(named: 'password'),
         ),
       ).thenAnswer(
-        (_) async => const LoginResult.tokens(
-          access: 'AA',
+        (_) async => LoginResult.tokens(
+          access: access,
           refresh: 'RR',
           emailVerified: true,
         ),
       );
 
-      final result = await repo.login(email: 'x@y', password: 'p');
+      final outcome = await repo.login(email: 'x@y', password: 'p');
 
-      expect(result, isA<LoginTokens>());
-      verify(() => store.write(SecureStore.kAccessToken, 'AA')).called(1);
+      expect(outcome, isA<LoginOutcomeTokens>());
+      final tokens = outcome as LoginOutcomeTokens;
+      expect(tokens.session.userId, 'user-42');
+      expect(tokens.emailVerified, isTrue);
+      verify(() => store.write(SecureStore.kAccessToken, access)).called(1);
       verify(() => store.write(SecureStore.kRefreshToken, 'RR')).called(1);
+      verify(() => store.write(SecureStore.kUserId, 'user-42')).called(1);
+    });
+
+    test('tokens with emailVerified=false: outcome flags it for the caller',
+        () async {
+      when(
+        () => api.login(
+          email: any(named: 'email'),
+          password: any(named: 'password'),
+        ),
+      ).thenAnswer(
+        (_) async => LoginResult.tokens(
+          access: jwtFor('u1'),
+          refresh: 'R',
+          emailVerified: false,
+        ),
+      );
+
+      final outcome = await repo.login(email: 'x@y', password: 'p');
+      expect(outcome, isA<LoginOutcomeTokens>());
+      expect((outcome as LoginOutcomeTokens).emailVerified, isFalse);
     });
 
     test('mfa required: does NOT persist any token', () async {
@@ -122,10 +153,48 @@ void main() {
         (_) async => const LoginResult.mfaRequired(mfaSession: 'MFAS'),
       );
 
-      final result = await repo.login(email: 'x@y', password: 'p');
-      expect(result, isA<LoginMfaRequired>());
+      final outcome = await repo.login(email: 'x@y', password: 'p');
+      expect(outcome, isA<LoginOutcomeMfaRequired>());
+      expect((outcome as LoginOutcomeMfaRequired).mfaSession, 'MFAS');
       verifyNever(() => store.write(SecureStore.kAccessToken, any()));
       verifyNever(() => store.write(SecureStore.kRefreshToken, any()));
+    });
+  });
+
+  group('password reset', () {
+    test('requestPasswordReset forwards to the API', () async {
+      when(() => api.requestPasswordReset(email: any(named: 'email')))
+          .thenAnswer((_) async {});
+      await repo.requestPasswordReset(email: 'alice@example.com');
+      verify(() => api.requestPasswordReset(email: 'alice@example.com'))
+          .called(1);
+    });
+
+    test('confirmPasswordReset forwards to the API without touching storage',
+        () async {
+      when(
+        () => api.confirmPasswordReset(
+          userId: any(named: 'userId'),
+          token: any(named: 'token'),
+          newPassword: any(named: 'newPassword'),
+        ),
+      ).thenAnswer((_) async {});
+      await repo.confirmPasswordReset(
+        userId: 'u-1',
+        token: 'T',
+        newPassword: 'brand-new-pw',
+      );
+      verify(
+        () => api.confirmPasswordReset(
+          userId: 'u-1',
+          token: 'T',
+          newPassword: 'brand-new-pw',
+        ),
+      ).called(1);
+      // The server already killed every prior refresh token — but the
+      // unauth'd confirm flow has no local session to touch.
+      verifyNever(() => store.write(SecureStore.kAccessToken, any()));
+      verifyNever(() => store.purgeAuth());
     });
   });
 

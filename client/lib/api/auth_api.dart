@@ -118,6 +118,35 @@ class AuthApi {
     await _client.post('/v1/auth/resend-verification', body: {'email': email});
   }
 
+  /// M1.7 password reset — phase 1. The server always returns
+  /// `{sent: true}` regardless of whether the address exists
+  /// (anti-enumeration), so this method has no meaningful return value
+  /// beyond "the network call succeeded".
+  Future<void> requestPasswordReset({required String email}) async {
+    await _client.post(
+      '/v1/auth/password-reset/request',
+      body: {'email': email},
+    );
+  }
+
+  /// M1.7 password reset — phase 2. Consumes the single-use link token
+  /// from the reset email and swaps the password hash. Server revokes
+  /// every prior refresh token as a side effect.
+  Future<void> confirmPasswordReset({
+    required String userId,
+    required String token,
+    required String newPassword,
+  }) async {
+    await _client.post(
+      '/v1/auth/password-reset/confirm',
+      body: {
+        'user_id': userId,
+        'token': token,
+        'new_password': newPassword,
+      },
+    );
+  }
+
   /// Enrol TOTP: authed call returns a base32 secret + otpauth URI +
   /// one-time recovery codes. The recovery codes are shown ONCE to the user
   /// and never returned again.

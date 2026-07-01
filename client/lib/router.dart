@@ -4,6 +4,8 @@ import 'package:go_router/go_router.dart';
 
 import 'features/auth/auth_providers.dart';
 import 'features/auth/login_screen.dart';
+import 'features/auth/password_reset_confirm_screen.dart';
+import 'features/auth/password_reset_request_screen.dart';
 import 'features/auth/register_screen.dart';
 import 'features/auth/totp_challenge_screen.dart';
 import 'features/auth/totp_enroll_screen.dart';
@@ -14,12 +16,14 @@ import 'features/home/home_screen.dart';
 ///
 /// The router reads `authSessionProvider` and redirects on session state:
 ///
-///   - unauthenticated user → `/login` (except the register / verify-email
-///     paths, which are self-serve pre-auth surfaces)
+///   - unauthenticated user → `/login` (except the register /
+///     verify-email / password-reset paths, which are self-serve
+///     pre-auth surfaces)
 ///   - authenticated user hitting `/login` or `/register` → `/`
 ///
-/// Deep links land on `/verify-email?user_id=…&token=…` (spec §M1.5). Both
-/// custom-scheme and universal / app-link URIs converge here.
+/// Deep links land on `/verify-email?user_id=…&token=…` (M1.5) or
+/// `/password-reset?user_id=…&token=…` (M1.7). Both custom-scheme and
+/// universal / app-link URIs converge here.
 final routerProvider = Provider<GoRouter>((ref) {
   final refresh = _AuthRefreshListenable(ref);
   return GoRouter(
@@ -37,7 +41,8 @@ final routerProvider = Provider<GoRouter>((ref) {
       final atAuthSurface = path == '/login' ||
           path == '/register' ||
           path == '/login/totp' ||
-          path == '/verify-email';
+          path == '/verify-email' ||
+          path == '/password-reset';
       if (!isSignedIn && !atAuthSurface) return '/login';
       if (isSignedIn && (path == '/login' || path == '/register')) return '/';
       return null;
@@ -68,6 +73,22 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/mfa/enroll',
         builder: (_, __) => const TotpEnrollScreen(),
+      ),
+      // M1.7 password-reset. Backend link is
+      // `/password-reset?user_id=…&token=…` — same path handles both
+      // phases: with the token pair it shows the "choose new password"
+      // form; without, it shows the "enter your email" form.
+      GoRoute(
+        path: '/password-reset',
+        builder: (context, state) {
+          final q = state.uri.queryParameters;
+          final userId = q['user_id'];
+          final token = q['token'];
+          if (userId != null && token != null) {
+            return PasswordResetConfirmScreen(userId: userId, token: token);
+          }
+          return const PasswordResetRequestScreen();
+        },
       ),
     ],
   );

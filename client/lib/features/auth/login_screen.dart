@@ -3,8 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../api/api_client.dart';
-import '../../api/auth_api.dart';
 import 'auth_providers.dart';
+import 'auth_repository.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -35,19 +35,31 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     });
     try {
       final repo = await ref.read(authRepositoryProvider.future);
-      final result = await repo.login(
+      final outcome = await repo.login(
         email: _email.text.trim(),
         password: _password.text,
       );
       if (!mounted) return;
-      if (result is LoginMfaRequired) {
-        context.go('/login/totp?session=${Uri.encodeComponent(result.mfaSession)}');
-        return;
+      switch (outcome) {
+        case LoginOutcomeMfaRequired(:final mfaSession):
+          context.go(
+            '/login/totp?session=${Uri.encodeComponent(mfaSession)}',
+          );
+        case LoginOutcomeTokens(:final session, :final emailVerified):
+          // Publish the session first so the router's redirect stops
+          // treating us as signed-out — otherwise `context.go('/')`
+          // bounces right back to `/login`.
+          await ref.read(authSessionProvider.notifier).setSession(session);
+          if (!mounted) return;
+          if (!emailVerified) {
+            final emailParam = Uri.encodeQueryComponent(_email.text.trim());
+            context.go(
+              '/verify-email?user_id=${session.userId}&email=$emailParam',
+            );
+          } else {
+            context.go('/');
+          }
       }
-      // Tokens: don't populate session with userId here — we don't have it
-      // from /login; the ApiClient will fetch /me on first authenticated
-      // request. For M1 we go to home and let it drive.
-      context.go('/');
     } on ApiException catch (exc) {
       setState(() => _error = exc.message);
     } finally {
@@ -101,7 +113,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
               ],
-              const SizedBox(height: 24),
+              const SizedBox(height: 16),
+              TextButton(
+                onPressed: _busy ? null : () => context.go('/password-reset'),
+                child: const Text('Forgot password?'),
+              ),
+              const SizedBox(height: 8),
               TextButton(
                 onPressed: _busy ? null : () => context.go('/register'),
                 child: const Text('New here? Create an account'),
