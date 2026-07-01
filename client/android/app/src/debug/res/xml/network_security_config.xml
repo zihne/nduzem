@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-only network security config. Allows cleartext HTTP to the
+  addresses the dev backend typically listens on so `flutter run` in
+  debug mode against http://10.0.2.2:8000 or a LAN IP works on
+  Android 9+.
+
+  Scoped to the src/debug/ variant so release builds inherit the
+  platform default (cleartext denied). See:
+  https://developer.android.com/training/articles/security-config
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- Android emulator loopback to the host. -->
+        <domain includeSubdomains="true">10.0.2.2</domain>
+        <!-- Localhost, for iOS simulator + hardened test builds. -->
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">127.0.0.1</domain>
+        <!-- Common LAN dev addresses. Add your workstation's LAN IP
+             here if it isn't one of these. -->
+        <domain includeSubdomains="true">192.168.1.1</domain>
+        <domain includeSubdomains="true">192.168.0.1</domain>
+    </domain-config>
+</network-security-config>
