@@ -101,4 +101,85 @@ void main() {
       expect(captured.containsKey('password'), isFalse);
     });
   });
+
+  group('/v1/auth/mfa/enroll (wire-shape regression)', () {
+    test('mfaEnrollBegin reads {secret, otpauth_url}', () async {
+      when(
+        () => client.post(any(), body: any(named: 'body'), authed: any(named: 'authed')),
+      ).thenAnswer(
+        (_) async => <String, dynamic>{
+          'secret': 'JBSWY3DPEHPK3PXP',
+          'otpauth_url': 'otpauth://totp/OpaqueShare:a?secret=…',
+        },
+      );
+
+      final result = await api.mfaEnrollBegin();
+
+      expect(result.secret, 'JBSWY3DPEHPK3PXP');
+      expect(result.otpauthUrl, startsWith('otpauth://'));
+    });
+
+    test('mfaEnrollConfirm returns {mfaEnabled, recoveryCodes}', () async {
+      when(
+        () => client.post(any(), body: any(named: 'body'), authed: any(named: 'authed')),
+      ).thenAnswer(
+        (_) async => <String, dynamic>{
+          'mfa_enabled': true,
+          'recovery_codes': ['abc-123', 'def-456'],
+        },
+      );
+
+      final result = await api.mfaEnrollConfirm(code: '123456');
+
+      expect(result.mfaEnabled, isTrue);
+      expect(result.recoveryCodes, ['abc-123', 'def-456']);
+
+      final captured = verify(
+        () => client.post(
+          '/v1/auth/mfa/enroll/confirm',
+          body: captureAny(named: 'body'),
+          authed: any(named: 'authed'),
+        ),
+      ).captured.single as Map<String, dynamic>;
+      expect(captured, {'code': '123456'});
+    });
+  });
+
+  group('/v1/auth/login/totp (wire-shape regression)', () {
+    test('loginTotp posts {mfa_session, code, is_recovery_code} — NOT is_recovery',
+        () async {
+      // Server field is `is_recovery_code` per LoginTotpRequest. If the
+      // client sends `is_recovery`, Pydantic silently drops it and every
+      // recovery-code login is treated as TOTP → recovery-code login
+      // would fail with 401. This test locks the field name.
+      when(
+        () => client.post(any(), body: any(named: 'body'), authed: any(named: 'authed')),
+      ).thenAnswer(
+        (_) async => <String, dynamic>{
+          'access': 'A',
+          'refresh': 'R',
+          'email_verified': true,
+        },
+      );
+
+      await api.loginTotp(
+        mfaSession: 'SESS',
+        code: '123456',
+        isRecovery: true,
+      );
+
+      final captured = verify(
+        () => client.post(
+          '/v1/auth/login/totp',
+          body: captureAny(named: 'body'),
+        ),
+      ).captured.single as Map<String, dynamic>;
+      expect(captured, {
+        'mfa_session': 'SESS',
+        'code': '123456',
+        'is_recovery_code': true,
+      });
+      expect(captured.containsKey('is_recovery'), isFalse);
+    });
+  });
 }
