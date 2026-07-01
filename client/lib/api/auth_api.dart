@@ -101,13 +101,16 @@ class AuthApi {
     );
   }
 
+  /// Manual verification via the 6-digit code. Server accepts EITHER
+  /// `{user_id, token}` (deep-link form, see [verifyEmail]) OR
+  /// `{email, code}` — never a mix. This helper is the code form.
   Future<void> verifyEmailCode({
-    required String userId,
+    required String email,
     required String code,
   }) async {
     await _client.post(
       '/v1/auth/verify-email',
-      body: {'user_id': userId, 'code': code},
+      body: {'email': email, 'code': code},
     );
   }
 

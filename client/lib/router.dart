@@ -56,9 +56,13 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/verify-email',
         builder: (context, state) {
-          final userId = state.uri.queryParameters['user_id'] ?? '';
-          final token = state.uri.queryParameters['token'];
-          return VerifyEmailScreen(userId: userId, token: token);
+          final q = state.uri.queryParameters;
+          final userId = q['user_id'] ?? '';
+          return VerifyEmailScreen(
+            userId: userId,
+            email: q['email'],
+            token: q['token'],
+          );
         },
       ),
       GoRoute(

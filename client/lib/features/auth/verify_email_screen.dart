@@ -5,23 +5,35 @@ import 'package:go_router/go_router.dart';
 import '../../api/api_client.dart';
 import 'auth_providers.dart';
 
-/// Two verification paths:
+/// Two verification paths, matching the server's `VerifyEmailRequest`
+/// (spec M1.5):
 ///
-///   - **Link**: opened via a deep link (`opaqueshare://verify-email?user_id=…&token=…`).
+///   - **Link**  : opened via a deep link (`.../verify-email?user_id=…&token=…`).
 ///     The router matches on the path, extracts params, and this screen
-///     auto-submits.
-///   - **Code**: the user types a 6-digit code manually. Used when the deep
-///     link path isn't available (older devices, cross-device flow, testing).
+///     auto-submits `{user_id, token}`.
+///   - **Code**  : the user types a 6-digit code and their email.
+///     The submitted body is `{email, code}` — the server rejects
+///     mixed `{user_id, code}` shapes (that's the bug fix we're
+///     shipping here).
+///
+/// The email is prefilled when we arrive here from `RegisterScreen`
+/// (which passes `?email=…`), so the common case is one-tap.
 class VerifyEmailScreen extends ConsumerStatefulWidget {
   const VerifyEmailScreen({
     super.key,
     required this.userId,
+    this.email,
     this.token,
   });
 
+  /// Populated from `?user_id=…`. Used only for the link form + resend UX.
   final String userId;
 
-  /// If non-null, we auto-submit the token path on mount.
+  /// Populated from `?email=…` when we arrive from register. Falls back
+  /// to a text field on this screen if the user landed here directly.
+  final String? email;
+
+  /// If non-null, we auto-submit the token form on mount.
   final String? token;
 
   @override
@@ -30,6 +42,7 @@ class VerifyEmailScreen extends ConsumerStatefulWidget {
 
 class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
   final _code = TextEditingController();
+  late final TextEditingController _emailField;
   bool _busy = false;
   String? _error;
   String? _info;
@@ -37,6 +50,7 @@ class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
   @override
   void initState() {
     super.initState();
+    _emailField = TextEditingController(text: widget.email ?? '');
     if (widget.token != null) {
       // Auto-verify from the deep link path. Schedule to next frame so the
       // widget tree is stable when we call context.go on success.
@@ -47,6 +61,7 @@ class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
   @override
   void dispose() {
     _code.dispose();
+    _emailField.dispose();
     super.dispose();
   }
 
@@ -67,6 +82,11 @@ class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
   }
 
   Future<void> _verifyCode() async {
+    final email = _emailField.text.trim();
+    if (!email.contains('@')) {
+      setState(() => _error = 'Enter the email you registered with.');
+      return;
+    }
     if (_code.text.trim().length < 4) {
       setState(() => _error = 'Enter the code from the email.');
       return;
@@ -77,7 +97,7 @@ class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
     });
     try {
       final repo = await ref.read(authRepositoryProvider.future);
-      await repo.verifyEmailCode(userId: widget.userId, code: _code.text.trim());
+      await repo.verifyEmailCode(email: email, code: _code.text.trim());
       if (mounted) context.go('/');
     } on ApiException catch (exc) {
       setState(() => _error = exc.message);
@@ -87,17 +107,22 @@ class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
   }
 
   Future<void> _resend() async {
+    final email = _emailField.text.trim();
+    if (!email.contains('@')) {
+      setState(() => _error = 'Enter your email above, then tap Resend.');
+      return;
+    }
     setState(() {
       _busy = true;
       _error = null;
       _info = null;
     });
     try {
-      // We need the email to resend. For M1 we don't hold it in the
-      // repository — surface a hint asking the user to sign in again if
-      // they lost the flow. A future milestone can cache the pending email
-      // in a short-lived provider.
-      setState(() => _info = 'Sign out and sign in again to resend the code.');
+      final repo = await ref.read(authRepositoryProvider.future);
+      await repo.resendVerification(email: email);
+      setState(() => _info = 'Check your email.');
+    } on ApiException catch (exc) {
+      setState(() => _error = exc.message);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -117,6 +142,14 @@ class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
               'the 6-digit code below.',
             ),
             const SizedBox(height: 24),
+            TextField(
+              controller: _emailField,
+              keyboardType: TextInputType.emailAddress,
+              autofillHints: const [AutofillHints.email],
+              decoration: const InputDecoration(labelText: 'Email'),
+              readOnly: widget.email != null,
+            ),
+            const SizedBox(height: 12),
             TextField(
               controller: _code,
               keyboardType: TextInputType.number,

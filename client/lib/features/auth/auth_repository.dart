@@ -123,10 +123,10 @@ class AuthRepository implements TokenSource {
       _api.verifyEmail(userId: userId, token: token);
 
   Future<void> verifyEmailCode({
-    required String userId,
+    required String email,
     required String code,
   }) =>
-      _api.verifyEmailCode(userId: userId, code: code);
+      _api.verifyEmailCode(email: email, code: code);
 
   Future<void> resendVerification({required String email}) =>
       _api.resendVerification(email: email);

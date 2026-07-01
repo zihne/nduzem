@@ -43,7 +43,10 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
       );
       await ref.read(authSessionProvider.notifier).setSession(session);
       if (mounted) {
-        context.go('/verify-email?user_id=${session.userId}');
+        // Thread the registered email through so the verify screen can
+        // send the {email, code} payload the server expects.
+        final email = Uri.encodeQueryComponent(_email.text.trim());
+        context.go('/verify-email?user_id=${session.userId}&email=$email');
       }
     } on ApiException catch (exc) {
       setState(() => _error = exc.message);
