@@ -1,0 +1,23 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  language:
+    strict-casts: true
+    strict-inference: true
+    strict-raw-types: true
+  errors:
+    # Fail the analyze step on missing return + unhandled awaits — these are
+    # the classes of bug that leak silently into async code.
+    missing_return: error
+    unawaited_futures: error
+
+linter:
+  rules:
+    # Keep the auth flow's async paths explicit.
+    always_declare_return_types: true
+    avoid_dynamic_calls: true
+    prefer_final_locals: true
+    prefer_single_quotes: true
+    require_trailing_commas: true
+    unnecessary_await_in_return: true
+    use_super_parameters: true

@@ -1,0 +1,88 @@
+import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+
+import 'features/auth/auth_providers.dart';
+import 'features/auth/login_screen.dart';
+import 'features/auth/register_screen.dart';
+import 'features/auth/totp_challenge_screen.dart';
+import 'features/auth/totp_enroll_screen.dart';
+import 'features/auth/verify_email_screen.dart';
+import 'features/home/home_screen.dart';
+
+/// Application routing tree.
+///
+/// The router reads `authSessionProvider` and redirects on session state:
+///
+///   - unauthenticated user → `/login` (except the register / verify-email
+///     paths, which are self-serve pre-auth surfaces)
+///   - authenticated user hitting `/login` or `/register` → `/`
+///
+/// Deep links land on `/verify-email?user_id=…&token=…` (spec §M1.5). Both
+/// custom-scheme and universal / app-link URIs converge here.
+final routerProvider = Provider<GoRouter>((ref) {
+  final refresh = _AuthRefreshListenable(ref);
+  return GoRouter(
+    initialLocation: '/',
+    refreshListenable: refresh,
+    redirect: (context, state) {
+      final session = ref.read(authSessionProvider);
+      // While the initial keystore probe is in flight, hold on `/` — the
+      // splash-y HomeScreen renders a spinner and reroutes when the value
+      // arrives.
+      if (session.isLoading) return null;
+      final isSignedIn = session.value != null;
+      final path = state.uri.path;
+
+      final atAuthSurface = path == '/login' ||
+          path == '/register' ||
+          path == '/login/totp' ||
+          path == '/verify-email';
+      if (!isSignedIn && !atAuthSurface) return '/login';
+      if (isSignedIn && (path == '/login' || path == '/register')) return '/';
+      return null;
+    },
+    routes: [
+      GoRoute(path: '/', builder: (_, __) => const HomeScreen()),
+      GoRoute(path: '/login', builder: (_, __) => const LoginScreen()),
+      GoRoute(path: '/register', builder: (_, __) => const RegisterScreen()),
+      GoRoute(
+        path: '/login/totp',
+        builder: (context, state) {
+          final session = state.uri.queryParameters['session'] ?? '';
+          return TotpChallengeScreen(mfaSession: session);
+        },
+      ),
+      GoRoute(
+        path: '/verify-email',
+        builder: (context, state) {
+          final userId = state.uri.queryParameters['user_id'] ?? '';
+          final token = state.uri.queryParameters['token'];
+          return VerifyEmailScreen(userId: userId, token: token);
+        },
+      ),
+      GoRoute(
+        path: '/mfa/enroll',
+        builder: (_, __) => const TotpEnrollScreen(),
+      ),
+    ],
+  );
+});
+
+/// Bridges Riverpod's `authSessionProvider` change events to go_router's
+/// `refreshListenable`, which expects a `Listenable`. Without this the
+/// router won't re-evaluate `redirect` after sign-in/out.
+class _AuthRefreshListenable extends ChangeNotifier {
+  _AuthRefreshListenable(this._ref) {
+    _sub = _ref.listen(authSessionProvider, (_, __) => notifyListeners());
+  }
+
+  final Ref _ref;
+  late final ProviderSubscription<Object?> _sub;
+
+  @override
+  void dispose() {
+    _sub.close();
+    super.dispose();
+  }
+}
