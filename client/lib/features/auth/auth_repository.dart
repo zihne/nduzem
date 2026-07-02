@@ -43,11 +43,13 @@ class AuthRepository implements TokenSource {
     final refresh = await _storage.read(SecureStore.kRefreshToken);
     final fp = await _storage.read(SecureStore.kFingerprint);
     final mfa = await _storage.read(SecureStore.kMfaEnabled);
+    final email = await _storage.read(SecureStore.kEmail);
     if (userId == null || access == null || refresh == null) return null;
     _accessCache = access;
     _refreshCache = refresh;
     return AuthSession(
       userId: userId,
+      email: email,
       fingerprint: fp ?? '',
       // Legacy sessions from before M2.5 won't have the key set —
       // default to false; the next successful login/enrol updates it.
@@ -85,6 +87,7 @@ class AuthRepository implements TokenSource {
       refresh: res.refresh,
       fingerprint: fp.canonical,
     );
+    await _storage.write(SecureStore.kEmail, email);
 
     _accessCache = res.access;
     _refreshCache = res.refresh;
@@ -92,6 +95,7 @@ class AuthRepository implements TokenSource {
     await _writeMfaEnabled(false);
     return AuthSession(
       userId: res.userId,
+      email: email,
       fingerprint: fp.canonical,
       mfaEnabled: false,
     );
@@ -113,6 +117,11 @@ class AuthRepository implements TokenSource {
     required String password,
   }) async {
     final result = await _api.login(email: email, password: password);
+    // Persist the email as soon as the server accepts the credentials
+    // (whether the tokens branch or the MFA-required branch fires next).
+    // `loginTotp` then reads it back from storage — the TOTP screen no
+    // longer needs a re-entry.
+    await _storage.write(SecureStore.kEmail, email);
     return switch (result) {
       LoginMfaRequired(:final mfaSession) =>
         LoginOutcome.mfaRequired(mfaSession),
@@ -172,8 +181,10 @@ class AuthRepository implements TokenSource {
     await _storage.write(SecureStore.kUserId, userId);
     await _writeMfaEnabled(mfaEnabled);
     final fp = await _storage.read(SecureStore.kFingerprint) ?? '';
+    final email = await _storage.read(SecureStore.kEmail);
     return AuthSession(
       userId: userId,
+      email: email,
       fingerprint: fp,
       mfaEnabled: mfaEnabled,
     );
@@ -307,10 +318,19 @@ class AuthRepository implements TokenSource {
 class AuthSession {
   const AuthSession({
     required this.userId,
+    required this.email,
     required this.fingerprint,
     required this.mfaEnabled,
   });
   final String userId;
+
+  /// The email the user typed at register or login. Kept in secure
+  /// storage so the home screen can show `Signed in as alice@…` instead
+  /// of the raw `user_id` UUID. Null when the local record predates
+  /// M2.x (or in the rare case where the account was set up via a
+  /// path that never went through `register` / `login`, which
+  /// currently doesn't exist).
+  final String? email;
 
   /// User's key fingerprint in canonical form (25 decimal digits, no spaces)
   /// matching `Fingerprint.canonical`. Empty when we don't have it locally
@@ -327,9 +347,15 @@ class AuthSession {
   /// alongside the tokens.
   final bool mfaEnabled;
 
-  AuthSession copyWith({String? userId, String? fingerprint, bool? mfaEnabled}) =>
+  AuthSession copyWith({
+    String? userId,
+    String? email,
+    String? fingerprint,
+    bool? mfaEnabled,
+  }) =>
       AuthSession(
         userId: userId ?? this.userId,
+        email: email ?? this.email,
         fingerprint: fingerprint ?? this.fingerprint,
         mfaEnabled: mfaEnabled ?? this.mfaEnabled,
       );

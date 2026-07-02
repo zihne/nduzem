@@ -55,8 +55,13 @@ class HomeScreen extends ConsumerWidget {
             return ListView(
               children: [
                 Text(
-                  'Signed in as ${data.userId}',
-                  style: Theme.of(context).textTheme.bodyMedium,
+                  'Signed in as',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 2),
+                SelectableText(
+                  data.email ?? '(email not on this device)',
+                  style: Theme.of(context).textTheme.titleMedium,
                 ),
                 const SizedBox(height: 24),
                 _FingerprintCard(fingerprint: fingerprint),

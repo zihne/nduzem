@@ -34,6 +34,7 @@ class SecureStore {
   static const String kAccessToken = 'auth.access_token';
   static const String kRefreshToken = 'auth.refresh_token';
   static const String kUserId = 'auth.user_id';
+  static const String kEmail = 'auth.email';
   static const String kFingerprint = 'auth.fingerprint';
   static const String kMfaEnabled = 'auth.mfa_enabled';
 
@@ -90,6 +91,7 @@ class SecureStore {
       delete(kAccessToken),
       delete(kRefreshToken),
       delete(kUserId),
+      delete(kEmail),
       delete(kFingerprint),
       delete(kMfaEnabled),
     ]);
