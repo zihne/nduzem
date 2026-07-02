@@ -10,14 +10,39 @@ import '../auth/auth_providers.dart';
 /// recipient. Refreshes via a Riverpod FutureProvider; pull-to-refresh
 /// invalidates it.
 ///
+/// Alongside each transfer we surface whether the recipient has verified
+/// the *sender's* fingerprint out-of-band via `/verify-contact`. That
+/// lets the recipient decide before tapping whether to trust the content
+/// or to go through OOB verification first.
+///
 /// The inbox response does NOT include `wrapped_key` (that requires a
 /// /download call which increments the download counter), so we cannot
-/// show real filenames here — only sender handle + byte count + expiry.
-/// Tapping a row navigates to `/receive/:id`, which then downloads,
-/// decrypts, and shows the real name before writing to disk.
-final inboxProvider = FutureProvider.autoDispose<List<InboxItem>>((ref) async {
+/// show real filenames here — only sender identity + byte count + expiry.
+
+class InboxViewData {
+  const InboxViewData({required this.items, required this.verifiedSenders});
+  final List<InboxItem> items;
+
+  /// Set of sender user_ids the recipient has verified OOB. Passed alongside
+  /// the inbox items so the tile can render an `unknown` warning without
+  /// each row firing its own async lookup.
+  final Set<String> verifiedSenders;
+}
+
+final inboxProvider =
+    FutureProvider.autoDispose<InboxViewData>((ref) async {
   final svc = await ref.watch(transferServiceProvider.future);
-  return svc.inbox();
+  final items = await svc.inbox();
+
+  final verifiedRepo = ref.watch(verifiedContactsRepoProvider);
+  final verified = <String>{};
+  for (final item in items) {
+    final sid = item.senderId;
+    if (sid == null) continue;
+    final vc = await verifiedRepo.read(sid);
+    if (vc != null) verified.add(sid);
+  }
+  return InboxViewData(items: items, verifiedSenders: verified);
 });
 
 class InboxScreen extends ConsumerWidget {
@@ -42,13 +67,18 @@ class InboxScreen extends ConsumerWidget {
         child: inbox.when(
           loading: () => const Center(child: CircularProgressIndicator()),
           error: (err, _) => _ErrorView(error: err),
-          data: (items) => items.isEmpty
+          data: (view) => view.items.isEmpty
               ? const _EmptyView()
               : ListView.separated(
                   padding: const EdgeInsets.symmetric(vertical: 8),
-                  itemCount: items.length,
+                  itemCount: view.items.length,
                   separatorBuilder: (_, __) => const Divider(height: 1),
-                  itemBuilder: (context, i) => _InboxTile(item: items[i]),
+                  itemBuilder: (context, i) {
+                    final item = view.items[i];
+                    final verified = item.senderId != null &&
+                        view.verifiedSenders.contains(item.senderId);
+                    return _InboxTile(item: item, senderVerified: verified);
+                  },
                 ),
         ),
       ),
@@ -57,26 +87,86 @@ class InboxScreen extends ConsumerWidget {
 }
 
 class _InboxTile extends StatelessWidget {
-  const _InboxTile({required this.item});
+  const _InboxTile({required this.item, required this.senderVerified});
   final InboxItem item;
+  final bool senderVerified;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return ListTile(
       leading: CircleAvatar(
-        backgroundColor: scheme.primaryContainer,
-        child: Icon(Icons.mail_outline, color: scheme.onPrimaryContainer),
+        backgroundColor: senderVerified
+            ? scheme.primaryContainer
+            : scheme.errorContainer,
+        child: Icon(
+          senderVerified ? Icons.verified_user : Icons.help_outline,
+          color: senderVerified
+              ? scheme.onPrimaryContainer
+              : scheme.onErrorContainer,
+        ),
       ),
-      title: Text(item.senderHandle ?? 'Unknown sender'),
-      subtitle: Text(
-        '${_bytes(item.byteCount)} · sent '
-        '${_relative(item.createdAt)} · expires '
-        '${_relative(item.expiresAt)}',
+      title: Row(
+        children: [
+          Expanded(
+            child: Text(
+              _senderLabel(item),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
       ),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '${_bytes(item.byteCount)} · sent '
+            '${_relative(item.createdAt)} · expires '
+            '${_relative(item.expiresAt)}',
+          ),
+          const SizedBox(height: 2),
+          Row(
+            children: [
+              Icon(
+                senderVerified ? Icons.check_circle : Icons.warning_amber,
+                size: 14,
+                color: senderVerified ? scheme.primary : scheme.error,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                senderVerified
+                    ? 'Verified sender'
+                    : 'Unknown sender — verify their fingerprint before '
+                        'trusting the file',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: senderVerified ? scheme.primary : scheme.error,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+      isThreeLine: true,
       trailing: const Icon(Icons.chevron_right),
       onTap: () => context.push('/receive/${item.transferId}'),
     );
+  }
+
+  /// Prefer the sender's handle if we have it; fall back to a short
+  /// form of the sender's user_id so the tile still identifies WHO sent
+  /// the file, not just "someone". If neither is available (link-mode
+  /// stub — M5 territory), say so.
+  static String _senderLabel(InboxItem item) {
+    final handle = item.senderHandle;
+    if (handle != null && handle.isNotEmpty) return '@$handle';
+    final id = item.senderId;
+    if (id != null && id.isNotEmpty) {
+      final short = id.length > 8 ? id.substring(0, 8) : id;
+      return 'Sender $short…';
+    }
+    return 'Anonymous sender';
   }
 
   static String _bytes(int n) {
