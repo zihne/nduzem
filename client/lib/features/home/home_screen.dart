@@ -55,21 +55,46 @@ class HomeScreen extends ConsumerWidget {
             return ListView(
               children: [
                 Text(
-                  'Signed in as ${data.userId}',
-                  style: Theme.of(context).textTheme.bodyMedium,
+                  'Signed in as',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 2),
+                SelectableText(
+                  data.email ?? '(email not on this device)',
+                  style: Theme.of(context).textTheme.titleMedium,
                 ),
                 const SizedBox(height: 24),
                 _FingerprintCard(fingerprint: fingerprint),
                 const SizedBox(height: 24),
+                Row(
+                  children: [
+                    Expanded(
+                      child: FilledButton.icon(
+                        onPressed: () => context.push('/send'),
+                        icon: const Icon(Icons.upload_file),
+                        label: const Text('Send a file'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: FilledButton.tonalIcon(
+                        onPressed: () => context.push('/inbox'),
+                        icon: const Icon(Icons.inbox),
+                        label: const Text('Inbox'),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
                 OutlinedButton.icon(
-                  onPressed: () => context.go('/verify-contact'),
+                  onPressed: () => context.push('/verify-contact'),
                   icon: const Icon(Icons.verified_user_outlined),
                   label: const Text("Verify a contact's fingerprint"),
                 ),
                 if (!data.mfaEnabled) ...[
                   const SizedBox(height: 12),
                   OutlinedButton.icon(
-                    onPressed: () => context.go('/mfa/enroll'),
+                    onPressed: () => context.push('/mfa/enroll'),
                     icon: const Icon(Icons.shield),
                     label: const Text('Enable two-factor authentication'),
                   ),

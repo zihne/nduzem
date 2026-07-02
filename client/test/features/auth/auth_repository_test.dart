@@ -83,6 +83,7 @@ void main() {
       );
 
       expect(session.userId, 'u1');
+      expect(session.email, 'a@b.c');
       expect(session.fingerprint.length, 25); // canonical form
       expect(session.mfaEnabled, isFalse); // fresh account
 
@@ -93,6 +94,7 @@ void main() {
       verify(() => store.write(SecureStore.kUserId, 'u1')).called(1);
       verify(() => store.write(SecureStore.kAccessToken, 'A')).called(1);
       verify(() => store.write(SecureStore.kRefreshToken, 'R')).called(1);
+      verify(() => store.write(SecureStore.kEmail, 'a@b.c')).called(1);
       verify(() => store.write(SecureStore.kMfaEnabled, 'false')).called(1);
     });
   });
@@ -115,11 +117,18 @@ void main() {
         ),
       );
 
+      // The M2.x wiring reads the email back from storage inside
+      // _acceptTokens to build the session. Ensure the read returns the
+      // value we just wrote.
+      when(() => store.read(SecureStore.kEmail))
+          .thenAnswer((_) async => 'x@y');
+
       final outcome = await repo.login(email: 'x@y', password: 'p');
 
       expect(outcome, isA<LoginOutcomeTokens>());
       final tokens = outcome as LoginOutcomeTokens;
       expect(tokens.session.userId, 'user-42');
+      expect(tokens.session.email, 'x@y');
       expect(tokens.emailVerified, isTrue);
       // Server issued tokens directly with no TOTP challenge — MFA off.
       expect(tokens.session.mfaEnabled, isFalse);
@@ -127,6 +136,7 @@ void main() {
       verify(() => store.write(SecureStore.kRefreshToken, 'RR')).called(1);
       verify(() => store.write(SecureStore.kUserId, 'user-42')).called(1);
       verify(() => store.write(SecureStore.kMfaEnabled, 'false')).called(1);
+      verify(() => store.write(SecureStore.kEmail, 'x@y')).called(1);
     });
 
     test('loginTotp success persists mfaEnabled=true', () async {

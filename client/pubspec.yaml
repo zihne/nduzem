@@ -48,6 +48,17 @@ dependencies:
   # absorbed into ours. `url_launcher` doesn't expose the flags.
   android_intent_plus: ^5.3.0
 
+  # File picker for the M2 send flow (choose a file to encrypt + upload).
+  file_picker: ^8.1.4
+
+  # MIME sniffing for the encrypted enc_header, so the receiver knows
+  # what to Save-As / how to open the decrypted plaintext.
+  mime: ^2.0.0
+
+  # Cross-platform temp/dest directories for the M2 receive flow
+  # (download → decrypt → write).
+  path_provider: ^2.1.5
+
 dev_dependencies:
   flutter_test: { sdk: flutter }
   flutter_lints: ^5.0.0
@@ -70,3 +81,10 @@ flutter_launcher_icons:
   min_sdk_android: 21
   # Remove the alpha channel from the iOS icon per Apple's requirement.
   remove_alpha_ios: true
+
+# Flutter-tool config. Bundles the Material Icons font (`MaterialIcons`) so
+# every `Icons.*` glyph — eye toggle, send, inbox, copy, shield, … — renders
+# instead of falling back to the "missing glyph" square. Without this flag
+# the font simply isn't in the APK.
+flutter:
+  uses-material-design: true

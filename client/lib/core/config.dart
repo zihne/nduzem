@@ -1,7 +1,7 @@
 /// App-wide config values. Runtime overrides via `--dart-define`.
 ///
-/// The backend URL must resolve to the FastAPI conduit — this is the ONLY
-/// origin the client talks to. Everything else (R2 object storage) flows via
+/// The backend URL must resolve to the API conduit — this is the ONLY
+/// origin the client talks to. Everything else (object storage) flows via
 /// presigned URLs the backend returns.
 ///
 /// Dev setup:

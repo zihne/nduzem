@@ -3,10 +3,15 @@ import 'package:sodium_libs/sodium_libs.dart';
 
 import '../../api/api_client.dart';
 import '../../api/auth_api.dart';
+import '../../api/transfers_api.dart';
 import '../../api/users_api.dart';
 import '../../core/config.dart';
+import '../../crypto/envelope.dart';
+import '../../crypto/file_crypto.dart';
 import '../../crypto/keys.dart';
+import '../../crypto/sealed_box.dart';
 import '../../storage/secure_storage.dart';
+import '../transfers/transfer_service.dart';
 import '../verify_contact/verified_contacts_repo.dart';
 import 'auth_repository.dart';
 
@@ -34,10 +39,12 @@ class _AuthWiring {
   const _AuthWiring({
     required this.authApi,
     required this.usersApi,
+    required this.transfersApi,
     required this.repository,
   });
   final AuthApi authApi;
   final UsersApi usersApi;
+  final TransfersApi transfersApi;
   final AuthRepository repository;
 }
 
@@ -54,10 +61,16 @@ final _authWiringProvider = FutureProvider<_AuthWiring>((ref) async {
   );
   final authApi = AuthApi(client);
   final usersApi = UsersApi(client);
+  final transfersApi = TransfersApi(client);
   repo = AuthRepository(api: authApi, storage: storage, keys: keys);
 
   ref.onDispose(client.close);
-  return _AuthWiring(authApi: authApi, usersApi: usersApi, repository: repo);
+  return _AuthWiring(
+    authApi: authApi,
+    usersApi: usersApi,
+    transfersApi: transfersApi,
+    repository: repo,
+  );
 });
 
 final authRepositoryProvider = FutureProvider<AuthRepository>((ref) async {
@@ -72,6 +85,45 @@ final usersApiProvider = FutureProvider<UsersApi>((ref) async {
 
 final verifiedContactsRepoProvider = Provider<VerifiedContactsRepo>((ref) {
   return VerifiedContactsRepo(ref.watch(secureStorageProvider));
+});
+
+// --- M2 transfer surface ------------------------------------------------
+
+final transfersApiProvider = FutureProvider<TransfersApi>((ref) async {
+  final wiring = await ref.watch(_authWiringProvider.future);
+  return wiring.transfersApi;
+});
+
+final sealedBoxProvider = FutureProvider<SealedBox>((ref) async {
+  final sodium = await ref.watch(sodiumProvider.future);
+  return SealedBox(sodium);
+});
+
+final fileCryptoProvider = FutureProvider<FileCrypto>((ref) async {
+  final sodium = await ref.watch(sodiumProvider.future);
+  return FileCrypto(sodium);
+});
+
+final envelopeProvider = FutureProvider<Envelope>((ref) async {
+  final sodium = await ref.watch(sodiumProvider.future);
+  return Envelope(sodium);
+});
+
+final transferServiceProvider = FutureProvider<TransferService>((ref) async {
+  final transfers = await ref.watch(transfersApiProvider.future);
+  final wiring = await ref.watch(_authWiringProvider.future);
+  final sealedBox = await ref.watch(sealedBoxProvider.future);
+  final fileCrypto = await ref.watch(fileCryptoProvider.future);
+  final envelope = await ref.watch(envelopeProvider.future);
+  final storage = ref.watch(secureStorageProvider);
+  return TransferService(
+    transfers: transfers,
+    users: wiring.usersApi,
+    sealedBox: sealedBox,
+    fileCrypto: fileCrypto,
+    envelope: envelope,
+    storage: storage,
+  );
 });
 
 // --- session state ------------------------------------------------------
