@@ -28,7 +28,9 @@ class SecureStore {
   // Suffixes here match on-disk keys; changing them is a data-migration event.
 
   static const String kIdentityPrivate = 'auth.identity_private_b64';
+  static const String kIdentityPublic = 'auth.identity_public_b64';
   static const String kSigningPrivate = 'auth.signing_private_b64';
+  static const String kSigningPublic = 'auth.signing_public_b64';
   static const String kAccessToken = 'auth.access_token';
   static const String kRefreshToken = 'auth.refresh_token';
   static const String kUserId = 'auth.user_id';
@@ -82,7 +84,9 @@ class SecureStore {
   Future<void> purgeAll() async {
     await Future.wait<void>([
       delete(kIdentityPrivate),
+      delete(kIdentityPublic),
       delete(kSigningPrivate),
+      delete(kSigningPublic),
       delete(kAccessToken),
       delete(kRefreshToken),
       delete(kUserId),

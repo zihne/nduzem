@@ -61,6 +61,26 @@ class HomeScreen extends ConsumerWidget {
                 const SizedBox(height: 24),
                 _FingerprintCard(fingerprint: fingerprint),
                 const SizedBox(height: 24),
+                Row(
+                  children: [
+                    Expanded(
+                      child: FilledButton.icon(
+                        onPressed: () => context.go('/send'),
+                        icon: const Icon(Icons.upload_file),
+                        label: const Text('Send a file'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: FilledButton.tonalIcon(
+                        onPressed: () => context.go('/inbox'),
+                        icon: const Icon(Icons.inbox),
+                        label: const Text('Inbox'),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
                 OutlinedButton.icon(
                   onPressed: () => context.go('/verify-contact'),
                   icon: const Icon(Icons.verified_user_outlined),

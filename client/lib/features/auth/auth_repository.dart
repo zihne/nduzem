@@ -273,7 +273,9 @@ class AuthRepository implements TokenSource {
 
   Future<void> _persistKeypair(IdentityKeypair pair) async {
     await _storage.writeBytes(SecureStore.kIdentityPrivate, pair.identityPrivate);
+    await _storage.writeBytes(SecureStore.kIdentityPublic, pair.identityPublic);
     await _storage.writeBytes(SecureStore.kSigningPrivate, pair.signingPrivate);
+    await _storage.writeBytes(SecureStore.kSigningPublic, pair.signingPublic);
   }
 
   Future<void> _persistTokens({
