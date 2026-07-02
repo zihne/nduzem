@@ -23,7 +23,7 @@ import '../../storage/secure_storage.dart';
 ///   3. Seal `K_file` for the recipient.
 ///   4. Sign SHA-256(ciphertext) with our signing_priv.
 ///   5. POST /initiate → get presigned URL.
-///   6. PUT ciphertext to R2.
+///   6. PUT ciphertext to the returned upload URL.
 ///   7. POST /commit.
 ///
 /// **Receive**:
@@ -132,7 +132,7 @@ class TransferService {
       signatureB64: base64Encode(signature),
     );
 
-    // 7. PUT the ciphertext to R2.
+    // 7. PUT the ciphertext to the presigned URL.
     final putRes = await _httpClient.put(
       Uri.parse(initiated.uploadUrl),
       body: ciphertext,
@@ -251,7 +251,8 @@ class TransferService {
     );
   }
 
-  /// POST /ack — server enqueues the R2 delete (burn-after-read).
+  /// POST /ack — server enqueues the burn-after-read delete of the
+  /// ciphertext object.
   Future<String> ack(String transferId) => _transfers.ack(transferId);
 
   // --- helpers ---------------------------------------------------------

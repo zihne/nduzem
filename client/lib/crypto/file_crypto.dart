@@ -5,7 +5,7 @@ import 'package:sodium_libs/sodium_libs.dart';
 
 /// Symmetric file-body encryption for M2 single-PUT transfers.
 ///
-/// Layout of the ciphertext blob (what gets PUT to R2):
+/// Layout of the ciphertext blob (what gets PUT to object storage):
 ///   `nonce (24 bytes) || crypto_secretbox_easy(plaintext, nonce, K_file)`
 ///
 /// The 24-byte XSalsa20 nonce is generated fresh per transfer via
@@ -25,7 +25,7 @@ class FileCrypto {
       _sodium.randombytes.buf(_sodium.crypto.secretBox.keyBytes);
 
   /// Encrypt a small file (whole thing in memory — M2 is single-PUT).
-  /// Returns the ciphertext blob suitable for direct upload to R2.
+  /// Returns the ciphertext blob suitable for direct upload to storage.
   Uint8List encryptFile({
     required Uint8List plaintext,
     required Uint8List key,

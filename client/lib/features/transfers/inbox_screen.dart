@@ -126,22 +126,28 @@ class _InboxTile extends StatelessWidget {
           ),
           const SizedBox(height: 2),
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(
-                senderVerified ? Icons.check_circle : Icons.warning_amber,
-                size: 14,
-                color: senderVerified ? scheme.primary : scheme.error,
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Icon(
+                  senderVerified ? Icons.check_circle : Icons.warning_amber,
+                  size: 14,
+                  color: senderVerified ? scheme.primary : scheme.error,
+                ),
               ),
               const SizedBox(width: 4),
-              Text(
-                senderVerified
-                    ? 'Verified sender'
-                    : 'Unknown sender — verify their fingerprint before '
-                        'trusting the file',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: senderVerified ? scheme.primary : scheme.error,
-                  fontStyle: FontStyle.italic,
+              Expanded(
+                child: Text(
+                  senderVerified
+                      ? 'Verified sender'
+                      : 'Unknown sender — verify their fingerprint '
+                          'before trusting the file',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: senderVerified ? scheme.primary : scheme.error,
+                    fontStyle: FontStyle.italic,
+                  ),
                 ),
               ),
             ],

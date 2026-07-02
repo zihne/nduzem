@@ -162,7 +162,7 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
               ] else if (!_acked) ...[
                 const Text(
                   'Now that the file is saved, ack the transfer to burn '
-                  "the sender's server-side copy. The R2 object is "
+                  "the sender's server-side copy. The object is "
                   'unrecoverable after this.',
                   style: TextStyle(fontStyle: FontStyle.italic),
                 ),

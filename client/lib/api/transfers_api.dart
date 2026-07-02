@@ -10,7 +10,8 @@ class TransfersApi {
   final ApiClient _client;
 
   /// POST `/v1/transfers/initiate` — server allocates a `storage_key`,
-  /// returns a presigned PUT URL for R2, and stamps `expires_at`.
+  /// returns a presigned PUT URL for object storage, and stamps
+  /// `expires_at`.
   Future<InitiateTransferResponse> initiate({
     required String recipientId,
     required int byteCount,
@@ -50,9 +51,9 @@ class TransfersApi {
     );
   }
 
-  /// POST `/v1/transfers/{id}/commit` — server does R2 HEAD, measures
-  /// the real byte_count, charges the sender's quota, and marks
-  /// `uploaded`.
+  /// POST `/v1/transfers/{id}/commit` — server does a HEAD on the
+  /// stored object, measures the real byte_count, charges the sender's
+  /// quota, and marks `uploaded`.
   Future<CommitTransferResponse> commit(String transferId) async {
     final body = await _client.post(
       '/v1/transfers/$transferId/commit',
@@ -94,7 +95,7 @@ class TransfersApi {
   }
 
   /// POST `/v1/transfers/{id}/ack` — recipient signals success, server
-  /// enqueues the R2 delete (burn-after-read) on the Redis queue.
+  /// enqueues the burn-after-read delete of the ciphertext object.
   Future<String> ack(String transferId) async {
     final body = await _client.post(
       '/v1/transfers/$transferId/ack',
