@@ -36,14 +36,18 @@ import '../../storage/secure_storage.dart';
 ///   7. Write to disk.
 ///   8. POST /ack.
 ///
-/// **Sender-signature verification** at receive is intentionally NOT
-/// implemented in M2. The server's download response carries the
-/// signature but not the sender's `signing_pub`, and
-/// `/v1/users/lookup` currently only accepts email/handle. When the
-/// server surfaces sender-pubkeys (either by extending lookup or by
-/// enriching the download response), this service will start
-/// verifying. Documented so nobody accidentally reads the current lack
-/// of a `verify` call as a security omission we didn't notice.
+/// **Sender-signature verification** at receive is wired up in M2.x
+/// (ADR-0031): the download response now carries
+/// `sender_signing_pub` alongside the signature, so [receive] can
+/// verify the Ed25519 detached signature over `blob_sha256` before
+/// spending CPU on the AEAD. A mismatch is a hard-block — we refuse to
+/// decrypt on a bad signature.
+///
+/// When `sender_signing_pub` is null the sender has erased themselves
+/// (M9.5); in that case we skip verification and note it on the
+/// returned [DecryptedTransfer] so the UI can render "sender is no
+/// longer available to verify against" instead of pretending the
+/// signature was checked.
 class TransferService {
   const TransferService({
     required TransfersApi transfers,
@@ -204,6 +208,29 @@ class TransferService {
       );
     }
 
+    // 3b. Sender signature. If the server surfaces `sender_signing_pub`
+    // (present iff the sender still has a live account — see
+    // ADR-0031), verify the Ed25519 detached signature over the raw
+    // bytes of `blob_sha256` before decrypting anything. A bad signature
+    // is fatal: it means either the file was tampered with or the
+    // server is lying about who sent it — either way, we refuse.
+    var senderSignatureVerified = false;
+    final senderSigningPubB64 = dl.senderSigningPubB64;
+    if (senderSigningPubB64 != null) {
+      final ok = _envelope.verifyBlobSha256Signature(
+        blobSha256Hex: dl.blobSha256Hex,
+        signature: base64Decode(dl.signatureB64),
+        senderSigningPublic: base64Decode(senderSigningPubB64),
+      );
+      if (!ok) {
+        throw StateError(
+          "Sender's signature does not verify against their signing_pub "
+          '— refusing to decrypt.',
+        );
+      }
+      senderSignatureVerified = true;
+    }
+
     // 4. Unseal wrapped_key with our identity keypair.
     final identityPriv = await _storage.readBytes(SecureStore.kIdentityPrivate);
     final identityPub = await _storage.readBytes(SecureStore.kIdentityPublic);
@@ -248,6 +275,8 @@ class TransferService {
       mime: header.mime,
       plaintext: plaintext,
       byteCount: plaintext.length,
+      senderSignatureVerified: senderSignatureVerified,
+      senderIdentityPubB64: dl.senderIdentityPubB64,
     );
   }
 
@@ -292,10 +321,24 @@ class DecryptedTransfer {
     required this.mime,
     required this.plaintext,
     required this.byteCount,
+    required this.senderSignatureVerified,
+    required this.senderIdentityPubB64,
   });
   final String transferId;
   final String filename;
   final String? mime;
   final Uint8List plaintext;
   final int byteCount;
+
+  /// True when the recipient verified the sender's Ed25519 detached
+  /// signature over `blob_sha256` against `senderSigningPub` at receive
+  /// time. False when the sender has erased themselves and their
+  /// pubkey was withheld — in that case the signature was NOT checked
+  /// and the UI should note it (rather than pretending it was safe).
+  final bool senderSignatureVerified;
+
+  /// Sender's `identity_pub` (base64), threaded through so the receive
+  /// screen can offer "verify this sender now" with the fingerprint
+  /// pre-computed. Null when the sender has erased themselves.
+  final String? senderIdentityPubB64;
 }

@@ -201,6 +201,40 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
   }
 }
 
+/// One-liner reassurance under the file info. Explains, in plain
+/// English, whether the recipient's client checked the sender's
+/// Ed25519 signature over `blob_sha256`. "Not verified" is not an
+/// error — it means the sender has since erased themselves (M9.5)
+/// and their public keys were withheld by the server (ADR-0031).
+class _SignatureBadge extends StatelessWidget {
+  const _SignatureBadge({required this.verified});
+  final bool verified;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final icon = verified ? Icons.verified : Icons.help_outline;
+    final color = verified ? scheme.primary : scheme.outline;
+    final text = verified
+        ? 'Sender signature verified against their signing key.'
+        : 'Sender key not available — signature could not be verified. '
+            'The sender may have erased their account.';
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 18, color: color),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            text,
+            style: TextStyle(color: color, fontSize: 12),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _DecryptedCard extends StatelessWidget {
   const _DecryptedCard({required this.decrypted, required this.savedPath});
   final DecryptedTransfer decrypted;
@@ -226,6 +260,8 @@ class _DecryptedCard extends StatelessWidget {
               '${decrypted.mime == null ? '' : ' · ${decrypted.mime}'}',
               style: const TextStyle(fontStyle: FontStyle.italic),
             ),
+            const SizedBox(height: 8),
+            _SignatureBadge(verified: decrypted.senderSignatureVerified),
             if (savedPath != null) ...[
               const SizedBox(height: 8),
               SelectableText(

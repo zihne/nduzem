@@ -5,11 +5,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 
 import 'package:opaqueshare/api/auth_api.dart';
+import 'package:opaqueshare/api/users_api.dart';
 import 'package:opaqueshare/crypto/keys.dart';
 import 'package:opaqueshare/features/auth/auth_repository.dart';
 import 'package:opaqueshare/storage/secure_storage.dart';
 
 class _FakeApi extends Mock implements AuthApi {}
+
+class _FakeUsersApi extends Mock implements UsersApi {}
 
 class _FakeStore extends Mock implements SecureStore {}
 
@@ -17,6 +20,7 @@ class _FakeKeys extends Mock implements KeypairGenerator {}
 
 void main() {
   late _FakeApi api;
+  late _FakeUsersApi usersApi;
   late _FakeStore store;
   late _FakeKeys keys;
   late AuthRepository repo;
@@ -28,9 +32,15 @@ void main() {
 
   setUp(() {
     api = _FakeApi();
+    usersApi = _FakeUsersApi();
     store = _FakeStore();
     keys = _FakeKeys();
-    repo = AuthRepository(api: api, storage: store, keys: keys);
+    repo = AuthRepository(
+      api: api,
+      usersApi: usersApi,
+      storage: store,
+      keys: keys,
+    );
 
     registerFallbackValue(Uint8List(0));
 

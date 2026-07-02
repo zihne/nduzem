@@ -49,9 +49,12 @@ class _TotpChallengeScreenState extends ConsumerState<TotpChallengeScreen> {
         setState(() => _error = 'Unexpected server response.');
         return;
       }
-      await ref
-          .read(authSessionProvider.notifier)
-          .setSession(outcome.session);
+      final notifier = ref.read(authSessionProvider.notifier);
+      await notifier.setSession(outcome.session);
+      // Reconcile handle + verified state against `/v1/users/me`
+      // (ADR-0032). This is a soft-failure step: a hiccup here still
+      // lets the user land on `/`.
+      await notifier.refreshMe();
       if (!mounted) return;
       if (!outcome.emailVerified) {
         context.go('/verify-email?user_id=${outcome.session.userId}');

@@ -62,7 +62,12 @@ final _authWiringProvider = FutureProvider<_AuthWiring>((ref) async {
   final authApi = AuthApi(client);
   final usersApi = UsersApi(client);
   final transfersApi = TransfersApi(client);
-  repo = AuthRepository(api: authApi, storage: storage, keys: keys);
+  repo = AuthRepository(
+    api: authApi,
+    usersApi: usersApi,
+    storage: storage,
+    keys: keys,
+  );
 
   ref.onDispose(client.close);
   return _AuthWiring(
@@ -144,6 +149,24 @@ class AuthNotifier extends AsyncNotifier<AuthSession?> {
 
   Future<void> setSession(AuthSession session) async {
     state = AsyncData(session);
+  }
+
+  /// Fetch `/v1/users/me` and reconcile the local session (ADR-0032).
+  /// Called by the register + login flows right after they set the
+  /// initial session. Failures here are swallowed on purpose — the
+  /// server is authoritative for what `/me` returns, but a network hiccup
+  /// on the follow-up call should not tear down a session the caller has
+  /// already established. The next successful call refreshes the state.
+  Future<void> refreshMe() async {
+    final current = state.value;
+    if (current == null) return;
+    try {
+      final repo = await ref.read(authRepositoryProvider.future);
+      final updated = await repo.refreshMe(current);
+      state = AsyncData(updated);
+    } on Object {
+      // Intentionally silent — a failed /me refresh is a soft failure.
+    }
   }
 
   /// Persists + updates the in-memory session flag after a successful
