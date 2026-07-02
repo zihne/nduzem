@@ -50,7 +50,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           // Publish the session first so the router's redirect stops
           // treating us as signed-out — otherwise `context.go('/')`
           // bounces right back to `/login`.
-          await ref.read(authSessionProvider.notifier).setSession(session);
+          final notifier = ref.read(authSessionProvider.notifier);
+          await notifier.setSession(session);
+          // Pull `/v1/users/me` so a fresh-device sign-in picks up the
+          // handle the user set at register time (ADR-0032).
+          await notifier.refreshMe();
           if (!mounted) return;
           if (!emailVerified) {
             final emailParam = Uri.encodeQueryComponent(_email.text.trim());

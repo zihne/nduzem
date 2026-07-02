@@ -91,6 +91,8 @@ class TransfersApi {
       blobSha256Hex: body['blob_sha256'] as String,
       encHeaderB64: body['enc_header'] as String,
       cryptoSuite: (body['crypto_suite'] as num).toInt(),
+      senderIdentityPubB64: body['sender_identity_pub'] as String?,
+      senderSigningPubB64: body['sender_signing_pub'] as String?,
     );
   }
 
@@ -165,6 +167,8 @@ class DownloadTransferResponse {
     required this.blobSha256Hex,
     required this.encHeaderB64,
     required this.cryptoSuite,
+    required this.senderIdentityPubB64,
+    required this.senderSigningPubB64,
   });
   final String downloadUrl;
   final String? wrappedKeyB64; // null in link mode (M5)
@@ -172,5 +176,16 @@ class DownloadTransferResponse {
   final String blobSha256Hex;
   final String encHeaderB64;
   final int cryptoSuite;
+
+  /// Sender's `identity_pub` (base64). Null when the sender has erased
+  /// themselves (M9.5) or in link mode (M5). Lets the recipient
+  /// recompute the sender's fingerprint locally and cross-check against
+  /// prior OOB verification (ADR-0031).
+  final String? senderIdentityPubB64;
+
+  /// Sender's `signing_pub` (base64). Null in the same cases as
+  /// [senderIdentityPubB64]. Verifies the Ed25519 `signatureB64` over
+  /// `blobSha256Hex` without a second lookup round-trip (ADR-0031).
+  final String? senderSigningPubB64;
 }
 

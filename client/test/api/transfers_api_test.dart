@@ -132,6 +132,30 @@ void main() {
       final dl = await api.requestDownload('t-1');
       expect(dl.wrappedKeyB64, 'WK');
       expect(dl.blobSha256Hex, 'a' * 64);
+      // Sender pubkeys are optional (see ADR-0031) — absent in this
+      // response means the receive path can't verify the signature.
+      expect(dl.senderIdentityPubB64, isNull);
+      expect(dl.senderSigningPubB64, isNull);
+    });
+
+    test('captures sender pubkeys when present (ADR-0031)', () async {
+      when(
+        () => client.post(any(), body: any(named: 'body'), authed: any(named: 'authed')),
+      ).thenAnswer(
+        (_) async => <String, dynamic>{
+          'download_url': 'https://r2.example/get',
+          'wrapped_key': 'WK',
+          'signature': 'SIG',
+          'blob_sha256': 'a' * 64,
+          'enc_header': 'EH',
+          'crypto_suite': 1,
+          'sender_identity_pub': 'SENDER_ID_PUB_B64',
+          'sender_signing_pub': 'SENDER_SIGN_PUB_B64',
+        },
+      );
+      final dl = await api.requestDownload('t-1');
+      expect(dl.senderIdentityPubB64, 'SENDER_ID_PUB_B64');
+      expect(dl.senderSigningPubB64, 'SENDER_SIGN_PUB_B64');
     });
   });
 

@@ -35,6 +35,10 @@ class SecureStore {
   static const String kRefreshToken = 'auth.refresh_token';
   static const String kUserId = 'auth.user_id';
   static const String kEmail = 'auth.email';
+  // Optional user-picked identifier (`@alice`). Persisted so the home
+  // screen can render `Signed in as … (@alice)` on cold-start without
+  // hitting `/v1/users/me` again. Refreshed after every register/login.
+  static const String kHandle = 'auth.handle';
   static const String kFingerprint = 'auth.fingerprint';
   static const String kMfaEnabled = 'auth.mfa_enabled';
 
@@ -92,6 +96,7 @@ class SecureStore {
       delete(kRefreshToken),
       delete(kUserId),
       delete(kEmail),
+      delete(kHandle),
       delete(kFingerprint),
       delete(kMfaEnabled),
     ]);

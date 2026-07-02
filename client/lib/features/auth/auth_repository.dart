@@ -1,5 +1,6 @@
 import '../../api/api_client.dart';
 import '../../api/auth_api.dart';
+import '../../api/users_api.dart';
 import '../../crypto/fingerprint.dart';
 import '../../crypto/jwt.dart';
 import '../../crypto/keys.dart';
@@ -18,13 +19,16 @@ import '../../storage/secure_storage.dart';
 class AuthRepository implements TokenSource {
   AuthRepository({
     required AuthApi api,
+    required UsersApi usersApi,
     required SecureStore storage,
     required KeypairGenerator keys,
   })  : _api = api,
+        _usersApi = usersApi,
         _storage = storage,
         _keys = keys;
 
   final AuthApi _api;
+  final UsersApi _usersApi;
   final SecureStore _storage;
   final KeypairGenerator _keys;
 
@@ -44,16 +48,48 @@ class AuthRepository implements TokenSource {
     final fp = await _storage.read(SecureStore.kFingerprint);
     final mfa = await _storage.read(SecureStore.kMfaEnabled);
     final email = await _storage.read(SecureStore.kEmail);
+    final handle = await _storage.read(SecureStore.kHandle);
     if (userId == null || access == null || refresh == null) return null;
     _accessCache = access;
     _refreshCache = refresh;
     return AuthSession(
       userId: userId,
       email: email,
+      handle: handle,
       fingerprint: fp ?? '',
       // Legacy sessions from before M2.5 won't have the key set —
       // default to false; the next successful login/enrol updates it.
       mfaEnabled: mfa == 'true',
+    );
+  }
+
+  /// Pull the caller's `/v1/users/me` and reconcile the local session.
+  /// Called after every successful register / login — the client learns
+  /// the current handle even on fresh-device sign-ins where the user only
+  /// typed an email. Handle + email are persisted so a subsequent
+  /// cold-start renders the same view without a re-fetch.
+  ///
+  /// Returns the updated `AuthSession`. Callers overwrite whatever
+  /// session they built from the auth-flow result with this one before
+  /// pushing it into the notifier.
+  Future<AuthSession> refreshMe(AuthSession baseline) async {
+    final me = await _usersApi.me();
+    // Persist the two fields the home screen relies on.
+    await _storage.write(SecureStore.kEmail, me.email);
+    if (me.handle != null) {
+      await _storage.write(SecureStore.kHandle, me.handle!);
+    } else {
+      await _storage.delete(SecureStore.kHandle);
+    }
+    return baseline.copyWith(
+      email: me.email,
+      handle: me.handle,
+      // The server is authoritative for these two — if the caller enrolled
+      // in MFA on another device, or verified their email via a link on
+      // desktop, `/me` reflects reality faster than the local bit.
+      mfaEnabled: me.mfaEnabled,
+      emailVerified: me.emailVerified,
+      erasedAt: me.erasedAt,
     );
   }
 
@@ -93,9 +129,13 @@ class AuthRepository implements TokenSource {
     _refreshCache = res.refresh;
     // Fresh account = MFA definitely not set up.
     await _writeMfaEnabled(false);
+    // Caller can/should follow up with [refreshMe] to pick up the handle
+    // + verified state as the server sees them; the immediate return is
+    // enough for the router to leave the register screen.
     return AuthSession(
       userId: res.userId,
       email: email,
+      handle: handle,
       fingerprint: fp.canonical,
       mfaEnabled: false,
     );
@@ -182,9 +222,11 @@ class AuthRepository implements TokenSource {
     await _writeMfaEnabled(mfaEnabled);
     final fp = await _storage.read(SecureStore.kFingerprint) ?? '';
     final email = await _storage.read(SecureStore.kEmail);
+    final handle = await _storage.read(SecureStore.kHandle);
     return AuthSession(
       userId: userId,
       email: email,
+      handle: handle,
       fingerprint: fp,
       mfaEnabled: mfaEnabled,
     );
@@ -312,25 +354,30 @@ class AuthRepository implements TokenSource {
   }
 }
 
-/// Snapshot of the signed-in user. Kept minimal — anything screen-specific
-/// (email, handle, verification state) is fetched on demand rather than
-/// cached in this repository.
+/// Snapshot of the signed-in user. Populated first from local secure
+/// storage (fast path on cold-start) and then reconciled against
+/// `/v1/users/me` after every register / login (ADR-0032) so fields the
+/// server owns — verified state, MFA, handle on a fresh device — are
+/// authoritative.
 class AuthSession {
   const AuthSession({
     required this.userId,
     required this.email,
+    required this.handle,
     required this.fingerprint,
     required this.mfaEnabled,
+    this.emailVerified = false,
+    this.erasedAt,
   });
   final String userId;
 
-  /// The email the user typed at register or login. Kept in secure
-  /// storage so the home screen can show `Signed in as alice@…` instead
-  /// of the raw `user_id` UUID. Null when the local record predates
-  /// M2.x (or in the rare case where the account was set up via a
-  /// path that never went through `register` / `login`, which
-  /// currently doesn't exist).
+  /// Email the user typed at register/login OR fetched from `/me`. Null
+  /// for legacy sessions that predate M2.x.
   final String? email;
+
+  /// User-picked identifier (`@alice`). Null when the user never set one
+  /// at register, or when this device hasn't refreshed `/me` yet.
+  final String? handle;
 
   /// User's key fingerprint in canonical form (25 decimal digits, no spaces)
   /// matching `Fingerprint.canonical`. Empty when we don't have it locally
@@ -338,26 +385,37 @@ class AuthSession {
   /// concern for M2+).
   final String fingerprint;
 
-  /// True when the account has TOTP MFA enabled. Tracked client-side by
-  /// inferring from the auth flow:
-  ///   - `/login` returned tokens directly     → false
-  ///   - `/login` triggered a TOTP challenge   → true (persisted post-TOTP)
-  ///   - `mfaEnrollConfirm` succeeded          → true
-  /// No server round-trip needed on app resume — the flag is on disk
-  /// alongside the tokens.
+  /// True when the account has TOTP MFA enabled. Populated from the
+  /// login/enrol flow and re-confirmed from `/me` after every sign-in.
   final bool mfaEnabled;
+
+  /// True when the server has recorded a verified email. Drives the
+  /// "verify your email" banner on the home screen. Defaults to false
+  /// on cold-restore; `refreshMe` supplies the truth from the server.
+  final bool emailVerified;
+
+  /// Non-null when the caller's account is tombstoned (M9.5). Home
+  /// screen renders an "your account has been erased" state and clears
+  /// local session data instead of attempting normal navigation.
+  final DateTime? erasedAt;
 
   AuthSession copyWith({
     String? userId,
     String? email,
+    String? handle,
     String? fingerprint,
     bool? mfaEnabled,
+    bool? emailVerified,
+    DateTime? erasedAt,
   }) =>
       AuthSession(
         userId: userId ?? this.userId,
         email: email ?? this.email,
+        handle: handle ?? this.handle,
         fingerprint: fingerprint ?? this.fingerprint,
         mfaEnabled: mfaEnabled ?? this.mfaEnabled,
+        emailVerified: emailVerified ?? this.emailVerified,
+        erasedAt: erasedAt ?? this.erasedAt,
       );
 }
 

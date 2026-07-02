@@ -5,7 +5,25 @@ import 'package:go_router/go_router.dart';
 
 import '../../crypto/fingerprint.dart';
 import '../auth/auth_providers.dart';
+import '../auth/auth_repository.dart';
 import 'fingerprint_qr_sheet.dart';
+
+/// `Signed in as` line. Both fields are optional in [AuthSession]:
+///   - email + handle → `alice@example.com (@alice)`
+///   - email only     → `alice@example.com`
+///   - handle only    → `@alice`
+///   - neither        → placeholder (legacy session that predates M2.x
+///                      or a broken `/me` — user should sign back in)
+String _identityLine(AuthSession s) {
+  final email = s.email;
+  final handle = s.handle;
+  if (email != null && email.isNotEmpty && handle != null) {
+    return '$email (@$handle)';
+  }
+  if (email != null && email.isNotEmpty) return email;
+  if (handle != null) return '@$handle';
+  return '(identity not on this device)';
+}
 
 /// Placeholder landing surface for the signed-in user. Real send / inbox
 /// screens land in M2. For M1 we surface the fingerprint (so the user can
@@ -60,7 +78,7 @@ class HomeScreen extends ConsumerWidget {
                 ),
                 const SizedBox(height: 2),
                 SelectableText(
-                  data.email ?? '(email not on this device)',
+                  _identityLine(data),
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
                 const SizedBox(height: 24),

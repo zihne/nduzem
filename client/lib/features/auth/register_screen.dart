@@ -42,7 +42,12 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
         password: _password.text,
         handle: _handle.text.trim().isEmpty ? null : _handle.text.trim(),
       );
-      await ref.read(authSessionProvider.notifier).setSession(session);
+      final notifier = ref.read(authSessionProvider.notifier);
+      await notifier.setSession(session);
+      // Reconcile against `/v1/users/me` so the home screen has the
+      // handle + verified state the server reports (ADR-0032). Soft
+      // failure — if /me falls over we still hand off to verify-email.
+      await notifier.refreshMe();
       if (mounted) {
         // Thread the registered email through so the verify screen can
         // send the {email, code} payload the server expects.
