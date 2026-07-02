@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import '../../api/api_client.dart';
 import '../../api/users_api.dart';
@@ -217,11 +216,6 @@ class _VerifyContactScreenState extends ConsumerState<VerifyContactScreen> {
               ],
             ],
 
-            const SizedBox(height: 32),
-            TextButton(
-              onPressed: () => context.go('/'),
-              child: const Text('Done'),
-            ),
           ],
         ),
       ),

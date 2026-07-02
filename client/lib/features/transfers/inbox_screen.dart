@@ -75,7 +75,7 @@ class _InboxTile extends StatelessWidget {
         '${_relative(item.expiresAt)}',
       ),
       trailing: const Icon(Icons.chevron_right),
-      onTap: () => context.go('/receive/${item.transferId}'),
+      onTap: () => context.push('/receive/${item.transferId}'),
     );
   }
 

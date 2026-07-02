@@ -65,7 +65,7 @@ class HomeScreen extends ConsumerWidget {
                   children: [
                     Expanded(
                       child: FilledButton.icon(
-                        onPressed: () => context.go('/send'),
+                        onPressed: () => context.push('/send'),
                         icon: const Icon(Icons.upload_file),
                         label: const Text('Send a file'),
                       ),
@@ -73,7 +73,7 @@ class HomeScreen extends ConsumerWidget {
                     const SizedBox(width: 12),
                     Expanded(
                       child: FilledButton.tonalIcon(
-                        onPressed: () => context.go('/inbox'),
+                        onPressed: () => context.push('/inbox'),
                         icon: const Icon(Icons.inbox),
                         label: const Text('Inbox'),
                       ),
@@ -82,14 +82,14 @@ class HomeScreen extends ConsumerWidget {
                 ),
                 const SizedBox(height: 16),
                 OutlinedButton.icon(
-                  onPressed: () => context.go('/verify-contact'),
+                  onPressed: () => context.push('/verify-contact'),
                   icon: const Icon(Icons.verified_user_outlined),
                   label: const Text("Verify a contact's fingerprint"),
                 ),
                 if (!data.mfaEnabled) ...[
                   const SizedBox(height: 12),
                   OutlinedButton.icon(
-                    onPressed: () => context.go('/mfa/enroll'),
+                    onPressed: () => context.push('/mfa/enroll'),
                     icon: const Icon(Icons.shield),
                     label: const Text('Enable two-factor authentication'),
                   ),

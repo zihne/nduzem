@@ -1,24 +1,26 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
-import 'package:path_provider/path_provider.dart';
 
 import '../../api/api_client.dart';
 import '../auth/auth_providers.dart';
 import 'transfer_service.dart';
 
-/// Fetches, decrypts, and saves a single transfer. Split into three
-/// stages so the user can pause between them:
+/// Four-stage flow (spec §5.3):
 ///
-///   1. **Ready**  — the tile explains what is about to happen.
-///   2. **Downloading** — spinner + server round-trip + AEAD decrypt.
-///   3. **Saved** — shows the destination path and the plaintext
-///      filename, plus a big red "Delete the sender's copy" button
-///      that fires `/ack` (server enqueues the R2 burn).
+///   1. **Ready**    — explain what the tap will do.
+///   2. **Decrypted** — bytes in memory; show file info; the user picks
+///      where to save them via a native SAF / document picker.
+///   3. **Saved**    — show the destination the user chose, plus the
+///      explicit "burn the sender's copy" button.
+///   4. **Acked**    — server-side burn queued.
 ///
-/// Ack is a separate step because it's destructive — the user might
-/// want to keep the transfer around briefly if their disk is full or
-/// they need to move the file elsewhere first.
+/// The save-location prompt in stage 2 is the whole reason receive was
+/// refactored — the previous "app documents dir" was a sandboxed path
+/// (`/data/data/…/app_flutter`) invisible to Android's Files app or any
+/// third-party file manager without root.
 class ReceiveScreen extends ConsumerStatefulWidget {
   const ReceiveScreen({super.key, required this.transferId});
   final String transferId;
@@ -28,7 +30,8 @@ class ReceiveScreen extends ConsumerStatefulWidget {
 }
 
 class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
-  ReceiveResult? _result;
+  DecryptedTransfer? _decrypted;
+  String? _savedPath;
   bool _acked = false;
   bool _busy = false;
   String? _error;
@@ -40,13 +43,50 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
     });
     try {
       final svc = await ref.read(transferServiceProvider.future);
-      final dir = await getApplicationDocumentsDirectory();
-      final res = await svc.receive(transferId: widget.transferId, destDir: dir);
-      setState(() => _result = res);
+      final res = await svc.receive(transferId: widget.transferId);
+      setState(() => _decrypted = res);
     } on ApiException catch (exc) {
       setState(() => _error = exc.message);
     } on Object catch (exc) {
       setState(() => _error = 'Download failed: $exc');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _saveAs() async {
+    final decrypted = _decrypted;
+    if (decrypted == null) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final result = await FilePicker.platform.saveFile(
+        dialogTitle: 'Save decrypted file',
+        fileName: decrypted.filename,
+        bytes: decrypted.plaintext,
+      );
+      if (result == null) {
+        // User cancelled the dialog — leave the plaintext in memory so
+        // they can try again.
+        return;
+      }
+      // On Android with Storage Access Framework, `result` is the path
+      // that file_picker wrote to for us; on iOS/desktop it's the path
+      // the user picked. In every case, we can verify the file exists
+      // and report the location back so the user knows where it landed.
+      final saved = File(result);
+      if (!saved.existsSync()) {
+        // Some Android variants return a content:// URI that isn't a
+        // filesystem path — the write still happened via SAF. Just
+        // surface the URI as-is.
+        setState(() => _savedPath = result);
+      } else {
+        setState(() => _savedPath = saved.path);
+      }
+    } on Object catch (exc) {
+      setState(() => _error = 'Save failed: $exc');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -76,11 +116,11 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
         padding: const EdgeInsets.all(16),
         child: ListView(
           children: [
-            if (_result == null) ...[
+            if (_decrypted == null) ...[
               const Text(
                 'This will download the encrypted bytes, verify the '
-                'ciphertext hash, decrypt locally with your device key, '
-                'and save the file into the app documents folder.',
+                'ciphertext hash, and decrypt locally with your device '
+                'key. You choose where to save the file after.',
               ),
               const SizedBox(height: 16),
               FilledButton.icon(
@@ -95,13 +135,35 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
                     : const Text('Download and decrypt'),
               ),
             ] else ...[
-              _SavedCard(result: _result!),
+              _DecryptedCard(
+                decrypted: _decrypted!,
+                savedPath: _savedPath,
+              ),
               const SizedBox(height: 16),
-              if (!_acked) ...[
+              if (_savedPath == null) ...[
                 const Text(
-                  'Once you have saved / moved / read the file, ack the '
-                  "transfer to burn the sender's server-side copy. The R2 "
-                  'object is unrecoverable after this.',
+                  'Pick where to save the decrypted file. On Android '
+                  'the system file picker opens; on iOS the Files app '
+                  'dialog opens.',
+                  style: TextStyle(fontStyle: FontStyle.italic),
+                ),
+                const SizedBox(height: 12),
+                FilledButton.icon(
+                  onPressed: _busy ? null : _saveAs,
+                  icon: const Icon(Icons.save),
+                  label: _busy
+                      ? const SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Save to...'),
+                ),
+              ] else if (!_acked) ...[
+                const Text(
+                  'Now that the file is saved, ack the transfer to burn '
+                  "the sender's server-side copy. The R2 object is "
+                  'unrecoverable after this.',
                   style: TextStyle(fontStyle: FontStyle.italic),
                 ),
                 const SizedBox(height: 12),
@@ -111,8 +173,7 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
                   label: const Text("Delete the sender's copy (ack)"),
                   style: FilledButton.styleFrom(
                     backgroundColor: Theme.of(context).colorScheme.error,
-                    foregroundColor:
-                        Theme.of(context).colorScheme.onError,
+                    foregroundColor: Theme.of(context).colorScheme.onError,
                   ),
                 ),
               ] else ...[
@@ -133,12 +194,6 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
                 style: TextStyle(color: Theme.of(context).colorScheme.error),
               ),
             ],
-
-            const SizedBox(height: 32),
-            TextButton(
-              onPressed: () => context.go('/inbox'),
-              child: const Text('Back to inbox'),
-            ),
           ],
         ),
       ),
@@ -146,9 +201,10 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
   }
 }
 
-class _SavedCard extends StatelessWidget {
-  const _SavedCard({required this.result});
-  final ReceiveResult result;
+class _DecryptedCard extends StatelessWidget {
+  const _DecryptedCard({required this.decrypted, required this.savedPath});
+  final DecryptedTransfer decrypted;
+  final String? savedPath;
 
   @override
   Widget build(BuildContext context) {
@@ -158,20 +214,25 @@ class _SavedCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Saved', style: Theme.of(context).textTheme.titleMedium),
+            Text(
+              savedPath == null ? 'Ready to save' : 'Saved',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
             const SizedBox(height: 8),
-            SelectableText(result.filename),
+            SelectableText(decrypted.filename),
             const SizedBox(height: 4),
             Text(
-              '${result.byteCount} bytes'
-              '${result.mime == null ? '' : ' · ${result.mime}'}',
+              '${decrypted.byteCount} bytes'
+              '${decrypted.mime == null ? '' : ' · ${decrypted.mime}'}',
               style: const TextStyle(fontStyle: FontStyle.italic),
             ),
-            const SizedBox(height: 8),
-            SelectableText(
-              result.savedPath,
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-            ),
+            if (savedPath != null) ...[
+              const SizedBox(height: 8),
+              SelectableText(
+                savedPath!,
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+              ),
+            ],
           ],
         ),
       ),

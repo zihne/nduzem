@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
@@ -160,16 +159,22 @@ class TransferService {
 
   // --- RECEIVE ----------------------------------------------------------
 
-  /// Fetches the download response, downloads bytes, decrypts, and
-  /// writes to `destDir`. Returns a [ReceiveResult] with the saved path.
+  /// Downloads bytes and decrypts them — but does **not** touch the disk.
+  /// The screen holds the decrypted [DecryptedTransfer.plaintext] in
+  /// memory and delegates the "where to save" question to the user via
+  /// `file_picker.saveFile` (or share sheet, etc.). Keeping the save
+  /// path out of this service:
+  ///
+  ///   - lets the user pick a location they can actually browse to (the
+  ///     app-documents dir is sandboxed on Android — not visible from
+  ///     the Files app or a file manager without root);
+  ///   - keeps this service free of a `path_provider` dependency it
+  ///     otherwise wouldn't need.
   ///
   /// Callers should invoke [ack] on the returned `transferId` once the
   /// user has actually saved / opened the file — losing the plaintext
   /// after ack is a data-loss cliff, so the ack is a separate call.
-  Future<ReceiveResult> receive({
-    required String transferId,
-    required Directory destDir,
-  }) async {
+  Future<DecryptedTransfer> receive({required String transferId}) async {
     // 1. Get presigned URL + envelope.
     final dl = await _transfers.requestDownload(transferId);
     if (dl.wrappedKeyB64 == null) {
@@ -235,18 +240,13 @@ class TransferService {
       );
     }
 
-    // 7. Write to disk. Sanitise the filename so a malicious sender
-    // cannot escape destDir via `../` or absolute paths.
-    final safeName = _sanitiseFilename(header.filename, transferId);
-    final path = _uniqueDestPath(destDir, safeName);
-    final file = File(path);
-    await file.writeAsBytes(plaintext, flush: true);
-
-    return ReceiveResult(
+    return DecryptedTransfer(
       transferId: transferId,
-      filename: safeName,
+      // Sanitise the filename so a malicious sender can't inject path
+      // separators / suspicious names into the eventual save dialog.
+      filename: _sanitiseFilename(header.filename, transferId),
       mime: header.mime,
-      savedPath: path,
+      plaintext: plaintext,
       byteCount: plaintext.length,
     );
   }
@@ -267,20 +267,6 @@ class TransferService {
     return cleaned;
   }
 
-  String _uniqueDestPath(Directory destDir, String name) {
-    var candidate = File('${destDir.path}/$name');
-    if (!candidate.existsSync()) return candidate.path;
-    // Suffix with (1), (2), … until a free name is found.
-    final dot = name.lastIndexOf('.');
-    final stem = dot < 0 ? name : name.substring(0, dot);
-    final ext = dot < 0 ? '' : name.substring(dot);
-    var i = 1;
-    while (candidate.existsSync()) {
-      candidate = File('${destDir.path}/$stem ($i)$ext');
-      i++;
-    }
-    return candidate.path;
-  }
 }
 
 // --- domain result types -------------------------------------------------
@@ -296,17 +282,19 @@ class SendResult {
   final String status;
 }
 
-class ReceiveResult {
-  const ReceiveResult({
+/// Result of a successful download + decrypt. The bytes live in memory
+/// until the caller writes them somewhere the user chose.
+class DecryptedTransfer {
+  const DecryptedTransfer({
     required this.transferId,
     required this.filename,
     required this.mime,
-    required this.savedPath,
+    required this.plaintext,
     required this.byteCount,
   });
   final String transferId;
   final String filename;
   final String? mime;
-  final String savedPath;
+  final Uint8List plaintext;
   final int byteCount;
 }
