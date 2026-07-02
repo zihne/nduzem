@@ -11,6 +11,7 @@ import 'features/auth/totp_challenge_screen.dart';
 import 'features/auth/totp_enroll_screen.dart';
 import 'features/auth/verify_email_screen.dart';
 import 'features/home/home_screen.dart';
+import 'features/verify_contact/verify_contact_screen.dart';
 
 /// Application routing tree.
 ///
@@ -73,6 +74,11 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/mfa/enroll',
         builder: (_, __) => const TotpEnrollScreen(),
+      ),
+      // M2.5 out-of-band contact verification.
+      GoRoute(
+        path: '/verify-contact',
+        builder: (_, __) => const VerifyContactScreen(),
       ),
       // M1.7 password-reset. Backend link is
       // `/password-reset?user_id=…&token=…` — same path handles both

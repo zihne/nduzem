@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../api/api_client.dart';
+import '../../widgets/password_form_field.dart';
 import 'auth_providers.dart';
 
 /// Phase 2 of the M1.7 password-reset flow: the user tapped the reset
@@ -92,23 +93,19 @@ class _PasswordResetConfirmScreenState
                 'on will be signed out.',
               ),
               const SizedBox(height: 24),
-              TextFormField(
+              PasswordFormField(
                 controller: _password,
-                obscureText: true,
+                labelText: 'New password',
                 autofillHints: const [AutofillHints.newPassword],
-                decoration: const InputDecoration(labelText: 'New password'),
                 validator: (v) => (v == null || v.length < 10)
                     ? 'Use at least 10 characters.'
                     : null,
               ),
               const SizedBox(height: 12),
-              TextFormField(
+              PasswordFormField(
                 controller: _confirm,
-                obscureText: true,
+                labelText: 'Confirm new password',
                 autofillHints: const [AutofillHints.newPassword],
-                decoration: const InputDecoration(
-                  labelText: 'Confirm new password',
-                ),
                 validator: (v) => (v == null || v.isEmpty)
                     ? 'Retype the new password.'
                     : null,

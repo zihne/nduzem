@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../api/api_client.dart';
+import '../../widgets/password_form_field.dart';
 import 'auth_providers.dart';
 import 'auth_repository.dart';
 
@@ -87,11 +88,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     (v == null || !v.contains('@')) ? 'Enter a valid email.' : null,
               ),
               const SizedBox(height: 12),
-              TextFormField(
+              PasswordFormField(
                 controller: _password,
-                obscureText: true,
+                labelText: 'Password',
                 autofillHints: const [AutofillHints.password],
-                decoration: const InputDecoration(labelText: 'Password'),
                 validator: (v) =>
                     (v == null || v.isEmpty) ? 'Enter your password.' : null,
               ),

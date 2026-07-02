@@ -3,9 +3,11 @@ import 'package:sodium_libs/sodium_libs.dart';
 
 import '../../api/api_client.dart';
 import '../../api/auth_api.dart';
+import '../../api/users_api.dart';
 import '../../core/config.dart';
 import '../../crypto/keys.dart';
 import '../../storage/secure_storage.dart';
+import '../verify_contact/verified_contacts_repo.dart';
 import 'auth_repository.dart';
 
 // --- infrastructure providers -------------------------------------------
@@ -27,10 +29,15 @@ final keypairGeneratorProvider = FutureProvider<KeypairGenerator>((ref) async {
 
 // The API client + auth repository have a chicken-and-egg dependency —
 // each references the other — so we construct them together in a single
-// provider and return the pair.
+// provider and return everything the API + auth surface needs.
 class _AuthWiring {
-  const _AuthWiring({required this.api, required this.repository});
-  final AuthApi api;
+  const _AuthWiring({
+    required this.authApi,
+    required this.usersApi,
+    required this.repository,
+  });
+  final AuthApi authApi;
+  final UsersApi usersApi;
   final AuthRepository repository;
 }
 
@@ -45,16 +52,26 @@ final _authWiringProvider = FutureProvider<_AuthWiring>((ref) async {
     // Late-binding closure: the repo isn't built yet at construction.
     tokenSource: _LateBoundTokenSource(() => repo),
   );
-  final api = AuthApi(client);
-  repo = AuthRepository(api: api, storage: storage, keys: keys);
+  final authApi = AuthApi(client);
+  final usersApi = UsersApi(client);
+  repo = AuthRepository(api: authApi, storage: storage, keys: keys);
 
   ref.onDispose(client.close);
-  return _AuthWiring(api: api, repository: repo);
+  return _AuthWiring(authApi: authApi, usersApi: usersApi, repository: repo);
 });
 
 final authRepositoryProvider = FutureProvider<AuthRepository>((ref) async {
   final wiring = await ref.watch(_authWiringProvider.future);
   return wiring.repository;
+});
+
+final usersApiProvider = FutureProvider<UsersApi>((ref) async {
+  final wiring = await ref.watch(_authWiringProvider.future);
+  return wiring.usersApi;
+});
+
+final verifiedContactsRepoProvider = Provider<VerifiedContactsRepo>((ref) {
+  return VerifiedContactsRepo(ref.watch(secureStorageProvider));
 });
 
 // --- session state ------------------------------------------------------
@@ -75,6 +92,16 @@ class AuthNotifier extends AsyncNotifier<AuthSession?> {
 
   Future<void> setSession(AuthSession session) async {
     state = AsyncData(session);
+  }
+
+  /// Persists + updates the in-memory session flag after a successful
+  /// TOTP enrolment (or, later, disable). No-op when there's no session.
+  Future<void> markMfaEnabled(bool value) async {
+    final repo = await ref.read(authRepositoryProvider.future);
+    await repo.setMfaEnabled(value);
+    final current = state.value;
+    if (current == null) return;
+    state = AsyncData(current.copyWith(mfaEnabled: value));
   }
 
   Future<void> clear() async {

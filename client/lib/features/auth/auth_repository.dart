@@ -41,11 +41,18 @@ class AuthRepository implements TokenSource {
     final userId = await _storage.read(SecureStore.kUserId);
     final access = await _storage.read(SecureStore.kAccessToken);
     final refresh = await _storage.read(SecureStore.kRefreshToken);
-    final fp = await _storage.read(SecureStore.kFingerprintHex);
+    final fp = await _storage.read(SecureStore.kFingerprint);
+    final mfa = await _storage.read(SecureStore.kMfaEnabled);
     if (userId == null || access == null || refresh == null) return null;
     _accessCache = access;
     _refreshCache = refresh;
-    return AuthSession(userId: userId, fingerprintHex: fp ?? '');
+    return AuthSession(
+      userId: userId,
+      fingerprint: fp ?? '',
+      // Legacy sessions from before M2.5 won't have the key set —
+      // default to false; the next successful login/enrol updates it.
+      mfaEnabled: mfa == 'true',
+    );
   }
 
   // --- register ------------------------------------------------------------
@@ -76,12 +83,18 @@ class AuthRepository implements TokenSource {
       userId: res.userId,
       access: res.access,
       refresh: res.refresh,
-      fingerprintHex: fp.rawHex,
+      fingerprint: fp.canonical,
     );
 
     _accessCache = res.access;
     _refreshCache = res.refresh;
-    return AuthSession(userId: res.userId, fingerprintHex: fp.rawHex);
+    // Fresh account = MFA definitely not set up.
+    await _writeMfaEnabled(false);
+    return AuthSession(
+      userId: res.userId,
+      fingerprint: fp.canonical,
+      mfaEnabled: false,
+    );
   }
 
   // --- login / TOTP --------------------------------------------------------
@@ -105,7 +118,12 @@ class AuthRepository implements TokenSource {
         LoginOutcome.mfaRequired(mfaSession),
       LoginTokens(:final access, :final refresh, :final emailVerified) =>
         LoginOutcome.tokens(
-          await _acceptTokens(access: access, refresh: refresh),
+          // Server issued tokens without an MFA challenge → MFA is off.
+          await _acceptTokens(
+            access: access,
+            refresh: refresh,
+            mfaEnabled: false,
+          ),
           emailVerified,
         ),
     };
@@ -129,7 +147,12 @@ class AuthRepository implements TokenSource {
       );
     }
     return LoginOutcome.tokens(
-      await _acceptTokens(access: result.access, refresh: result.refresh),
+      // We just completed a TOTP challenge → MFA is definitely on.
+      await _acceptTokens(
+        access: result.access,
+        refresh: result.refresh,
+        mfaEnabled: true,
+      ),
       result.emailVerified,
     );
   }
@@ -142,13 +165,25 @@ class AuthRepository implements TokenSource {
   Future<AuthSession> _acceptTokens({
     required String access,
     required String refresh,
+    required bool mfaEnabled,
   }) async {
     await _persistTokensOnly(access: access, refresh: refresh);
     final userId = extractSubject(access);
     await _storage.write(SecureStore.kUserId, userId);
-    final fp = await _storage.read(SecureStore.kFingerprintHex) ?? '';
-    return AuthSession(userId: userId, fingerprintHex: fp);
+    await _writeMfaEnabled(mfaEnabled);
+    final fp = await _storage.read(SecureStore.kFingerprint) ?? '';
+    return AuthSession(
+      userId: userId,
+      fingerprint: fp,
+      mfaEnabled: mfaEnabled,
+    );
   }
+
+  Future<void> _writeMfaEnabled(bool value) =>
+      _storage.write(SecureStore.kMfaEnabled, value ? 'true' : 'false');
+
+  /// Public setter for the notifier to update on successful enrol.
+  Future<void> setMfaEnabled(bool value) => _writeMfaEnabled(value);
 
   // --- verify email --------------------------------------------------------
 
@@ -198,10 +233,15 @@ class AuthRepository implements TokenSource {
 
   // --- sign out ------------------------------------------------------------
 
+  /// Session-level sign-out: clears tokens + the MFA-enabled flag so the
+  /// next login has to re-authenticate. **Preserves** the private keys,
+  /// user id, and fingerprint so a subsequent login by the same user on
+  /// this device can still decrypt K_files sealed under those keys.
+  /// See [SecureStore.purgeSession] for the rationale.
   Future<void> signOut() async {
     _accessCache = null;
     _refreshCache = null;
-    await _storage.purgeAuth();
+    await _storage.purgeSession();
   }
 
   // --- TokenSource for ApiClient ------------------------------------------
@@ -240,12 +280,12 @@ class AuthRepository implements TokenSource {
     required String userId,
     required String access,
     required String refresh,
-    required String fingerprintHex,
+    required String fingerprint,
   }) async {
     await _storage.write(SecureStore.kUserId, userId);
     await _storage.write(SecureStore.kAccessToken, access);
     await _storage.write(SecureStore.kRefreshToken, refresh);
-    await _storage.write(SecureStore.kFingerprintHex, fingerprintHex);
+    await _storage.write(SecureStore.kFingerprint, fingerprint);
   }
 
   Future<void> _persistTokensOnly({
@@ -263,9 +303,34 @@ class AuthRepository implements TokenSource {
 /// (email, handle, verification state) is fetched on demand rather than
 /// cached in this repository.
 class AuthSession {
-  const AuthSession({required this.userId, required this.fingerprintHex});
+  const AuthSession({
+    required this.userId,
+    required this.fingerprint,
+    required this.mfaEnabled,
+  });
   final String userId;
-  final String fingerprintHex;
+
+  /// User's key fingerprint in canonical form (25 decimal digits, no spaces)
+  /// matching `Fingerprint.canonical`. Empty when we don't have it locally
+  /// (e.g. logged in on a device that never registered — a multi-device
+  /// concern for M2+).
+  final String fingerprint;
+
+  /// True when the account has TOTP MFA enabled. Tracked client-side by
+  /// inferring from the auth flow:
+  ///   - `/login` returned tokens directly     → false
+  ///   - `/login` triggered a TOTP challenge   → true (persisted post-TOTP)
+  ///   - `mfaEnrollConfirm` succeeded          → true
+  /// No server round-trip needed on app resume — the flag is on disk
+  /// alongside the tokens.
+  final bool mfaEnabled;
+
+  AuthSession copyWith({String? userId, String? fingerprint, bool? mfaEnabled}) =>
+      AuthSession(
+        userId: userId ?? this.userId,
+        fingerprint: fingerprint ?? this.fingerprint,
+        mfaEnabled: mfaEnabled ?? this.mfaEnabled,
+      );
 }
 
 /// Result of [AuthRepository.login] / [AuthRepository.loginTotp]. Screens

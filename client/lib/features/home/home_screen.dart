@@ -1,13 +1,25 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../crypto/fingerprint.dart';
 import '../auth/auth_providers.dart';
+import 'fingerprint_qr_sheet.dart';
 
 /// Placeholder landing surface for the signed-in user. Real send / inbox
 /// screens land in M2. For M1 we surface the fingerprint (so the user can
-/// cross-check with a counterparty out-of-band per spec §6) and the sign-out
-/// path.
+/// cross-check with a counterparty out-of-band per spec §6) and the
+/// sign-out path.
+///
+/// Fingerprint UX (M2.5):
+///   - The stored form is [Fingerprint.canonical] (25 decimal digits, no
+///     spaces) — the exact string the server-side `key_fingerprint` also
+///     produces, so OOB comparisons work whichever direction the value
+///     travelled.
+///   - We render [Fingerprint.display] (5 groups of 5) for humans and
+///     offer three OOB share paths: read it, copy to clipboard, or show
+///     as QR.
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
 
@@ -37,34 +49,61 @@ class HomeScreen extends ConsumerWidget {
             if (data == null) {
               return const Text('Not signed in.');
             }
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            final fingerprint = data.fingerprint.isEmpty
+                ? null
+                : Fingerprint(data.fingerprint);
+            return ListView(
               children: [
                 Text(
                   'Signed in as ${data.userId}',
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
-                const SizedBox(height: 16),
-                Text(
-                  'Your fingerprint',
-                  style: Theme.of(context).textTheme.titleMedium,
+                const SizedBox(height: 24),
+                _FingerprintCard(fingerprint: fingerprint),
+                const SizedBox(height: 24),
+                OutlinedButton.icon(
+                  onPressed: () => context.go('/verify-contact'),
+                  icon: const Icon(Icons.verified_user_outlined),
+                  label: const Text("Verify a contact's fingerprint"),
                 ),
-                const SizedBox(height: 4),
-                SelectableText(
-                  _groupForDisplay(data.fingerprintHex),
-                  style: const TextStyle(fontFamily: 'monospace'),
+                if (!data.mfaEnabled) ...[
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: () => context.go('/mfa/enroll'),
+                    icon: const Icon(Icons.shield),
+                    label: const Text('Enable two-factor authentication'),
+                  ),
+                ] else ...[
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.shield,
+                        size: 18,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                      const SizedBox(width: 8),
+                      const Text('Two-factor authentication is on'),
+                    ],
+                  ),
+                ],
+                const SizedBox(height: 32),
+                const Divider(),
+                const SizedBox(height: 16),
+                FilledButton.tonalIcon(
+                  onPressed: () async {
+                    await ref.read(authSessionProvider.notifier).clear();
+                    if (context.mounted) context.go('/login');
+                  },
+                  icon: const Icon(Icons.logout),
+                  label: const Text('Sign out'),
                 ),
                 const SizedBox(height: 8),
                 const Text(
-                  'Share this out-of-band with the people you transfer with. '
-                  'If it changes, someone may be intercepting your keys.',
+                  'Signing out clears your session on this device. Your '
+                  'private keys stay on-device so you can sign back in '
+                  'and keep decrypting past transfers.',
                   style: TextStyle(fontStyle: FontStyle.italic),
-                ),
-                const SizedBox(height: 24),
-                OutlinedButton.icon(
-                  onPressed: () => context.go('/mfa/enroll'),
-                  icon: const Icon(Icons.shield),
-                  label: const Text('Enable two-factor authentication'),
                 ),
               ],
             );
@@ -75,13 +114,77 @@ class HomeScreen extends ConsumerWidget {
   }
 }
 
-String _groupForDisplay(String hex) {
-  if (hex.isEmpty) return '(unavailable)';
-  final head = hex.length >= 60 ? hex.substring(0, 60) : hex;
-  final buf = StringBuffer();
-  for (var i = 0; i < head.length; i += 5) {
-    if (i > 0) buf.write(' ');
-    buf.write(head.substring(i, i + 5 > head.length ? head.length : i + 5));
+class _FingerprintCard extends StatelessWidget {
+  const _FingerprintCard({required this.fingerprint});
+  final Fingerprint? fingerprint;
+
+  @override
+  Widget build(BuildContext context) {
+    final fp = fingerprint;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Your fingerprint',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            if (fp == null)
+              const Text(
+                '(not available on this device — sign in on the device '
+                'where you registered to view it)',
+                style: TextStyle(fontStyle: FontStyle.italic),
+              )
+            else ...[
+              SelectableText(
+                fp.display,
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 18,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Share this out-of-band with the people you transfer with. '
+                'If it changes, someone may be intercepting your keys.',
+                style: TextStyle(fontStyle: FontStyle.italic),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      final messenger = ScaffoldMessenger.of(context);
+                      await Clipboard.setData(
+                        ClipboardData(text: fp.display),
+                      );
+                      messenger.showSnackBar(
+                        const SnackBar(content: Text('Fingerprint copied.')),
+                      );
+                    },
+                    icon: const Icon(Icons.copy),
+                    label: const Text('Copy'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: () => showModalBottomSheet<void>(
+                      context: context,
+                      isScrollControlled: true,
+                      builder: (_) => FingerprintQrSheet(fingerprint: fp),
+                    ),
+                    icon: const Icon(Icons.qr_code),
+                    label: const Text('Show QR'),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
   }
-  return buf.toString();
 }

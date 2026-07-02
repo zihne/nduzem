@@ -32,7 +32,8 @@ class SecureStore {
   static const String kAccessToken = 'auth.access_token';
   static const String kRefreshToken = 'auth.refresh_token';
   static const String kUserId = 'auth.user_id';
-  static const String kFingerprintHex = 'auth.fingerprint_hex';
+  static const String kFingerprint = 'auth.fingerprint';
+  static const String kMfaEnabled = 'auth.mfa_enabled';
 
   // --- string API ----------------------------------------------------------
 
@@ -54,16 +55,39 @@ class SecureStore {
     return base64Decode(raw);
   }
 
-  // --- bulk purge (used on logout / erasure) -------------------------------
+  // --- bulk purge --------------------------------------------------------
+  //
+  // Two flavours matching the two real-world scenarios:
+  //
+  //   [purgeSession] — the sign-out path. Clears tokens + MFA flag so the
+  //   next login has to reauthenticate, but KEEPS identity state
+  //   (private keys, fingerprint, user_id). This is the difference
+  //   between "log out of this session" and "wipe my device": a same-
+  //   account re-login on this device seamlessly picks up the local
+  //   private keys and can still decrypt sealed K_files from past
+  //   transfers. Without this distinction, casual sign-out would
+  //   destroy the user's ability to decrypt anything sent to them.
+  //
+  //   [purgeAll] — the erasure / device-hand-off path. Clears everything
+  //   on disk. The user is done with this device.
 
-  Future<void> purgeAuth() async {
+  Future<void> purgeSession() async {
+    await Future.wait<void>([
+      delete(kAccessToken),
+      delete(kRefreshToken),
+      delete(kMfaEnabled),
+    ]);
+  }
+
+  Future<void> purgeAll() async {
     await Future.wait<void>([
       delete(kIdentityPrivate),
       delete(kSigningPrivate),
       delete(kAccessToken),
       delete(kRefreshToken),
       delete(kUserId),
-      delete(kFingerprintHex),
+      delete(kFingerprint),
+      delete(kMfaEnabled),
     ]);
   }
 }

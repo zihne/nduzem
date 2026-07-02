@@ -37,7 +37,8 @@ void main() {
     when(() => store.write(any(), any())).thenAnswer((_) async {});
     when(() => store.writeBytes(any(), any())).thenAnswer((_) async {});
     when(() => store.delete(any())).thenAnswer((_) async {});
-    when(() => store.purgeAuth()).thenAnswer((_) async {});
+    when(() => store.purgeSession()).thenAnswer((_) async {});
+    when(() => store.purgeAll()).thenAnswer((_) async {});
     when(() => store.read(any())).thenAnswer((_) async => null);
   });
 
@@ -82,7 +83,8 @@ void main() {
       );
 
       expect(session.userId, 'u1');
-      expect(session.fingerprintHex.length, 64); // SHA-256 hex
+      expect(session.fingerprint.length, 25); // canonical form
+      expect(session.mfaEnabled, isFalse); // fresh account
 
       verify(() => store.writeBytes(SecureStore.kIdentityPrivate, identityPriv))
           .called(1);
@@ -91,6 +93,7 @@ void main() {
       verify(() => store.write(SecureStore.kUserId, 'u1')).called(1);
       verify(() => store.write(SecureStore.kAccessToken, 'A')).called(1);
       verify(() => store.write(SecureStore.kRefreshToken, 'R')).called(1);
+      verify(() => store.write(SecureStore.kMfaEnabled, 'false')).called(1);
     });
   });
 
@@ -118,9 +121,39 @@ void main() {
       final tokens = outcome as LoginOutcomeTokens;
       expect(tokens.session.userId, 'user-42');
       expect(tokens.emailVerified, isTrue);
+      // Server issued tokens directly with no TOTP challenge — MFA off.
+      expect(tokens.session.mfaEnabled, isFalse);
       verify(() => store.write(SecureStore.kAccessToken, access)).called(1);
       verify(() => store.write(SecureStore.kRefreshToken, 'RR')).called(1);
       verify(() => store.write(SecureStore.kUserId, 'user-42')).called(1);
+      verify(() => store.write(SecureStore.kMfaEnabled, 'false')).called(1);
+    });
+
+    test('loginTotp success persists mfaEnabled=true', () async {
+      final access = jwtFor('user-9');
+      when(
+        () => api.loginTotp(
+          mfaSession: any(named: 'mfaSession'),
+          code: any(named: 'code'),
+          isRecovery: any(named: 'isRecovery'),
+        ),
+      ).thenAnswer(
+        (_) async => LoginResult.tokens(
+          access: access,
+          refresh: 'R',
+          emailVerified: true,
+        ),
+      );
+
+      final outcome = await repo.loginTotp(
+        mfaSession: 'SESS',
+        code: '123456',
+        isRecovery: false,
+      );
+
+      expect(outcome, isA<LoginOutcomeTokens>());
+      expect((outcome as LoginOutcomeTokens).session.mfaEnabled, isTrue);
+      verify(() => store.write(SecureStore.kMfaEnabled, 'true')).called(1);
     });
 
     test('tokens with emailVerified=false: outcome flags it for the caller',
@@ -194,14 +227,62 @@ void main() {
       // The server already killed every prior refresh token — but the
       // unauth'd confirm flow has no local session to touch.
       verifyNever(() => store.write(SecureStore.kAccessToken, any()));
-      verifyNever(() => store.purgeAuth());
+      verifyNever(() => store.purgeSession());
+      verifyNever(() => store.purgeAll());
+    });
+  });
+
+  group('setMfaEnabled', () {
+    test('persists the flag verbatim', () async {
+      await repo.setMfaEnabled(true);
+      verify(() => store.write(SecureStore.kMfaEnabled, 'true')).called(1);
+      await repo.setMfaEnabled(false);
+      verify(() => store.write(SecureStore.kMfaEnabled, 'false')).called(1);
+    });
+  });
+
+  group('restoreSession', () {
+    test('reads mfaEnabled = true when stored', () async {
+      when(() => store.read(SecureStore.kUserId))
+          .thenAnswer((_) async => 'u-1');
+      when(() => store.read(SecureStore.kAccessToken))
+          .thenAnswer((_) async => 'A');
+      when(() => store.read(SecureStore.kRefreshToken))
+          .thenAnswer((_) async => 'R');
+      when(() => store.read(SecureStore.kFingerprint))
+          .thenAnswer((_) async => '0000000000000000000000000');
+      when(() => store.read(SecureStore.kMfaEnabled))
+          .thenAnswer((_) async => 'true');
+
+      final session = await repo.restoreSession();
+      expect(session?.mfaEnabled, isTrue);
+    });
+
+    test('defaults mfaEnabled to false for legacy sessions (key missing)',
+        () async {
+      when(() => store.read(SecureStore.kUserId))
+          .thenAnswer((_) async => 'u-1');
+      when(() => store.read(SecureStore.kAccessToken))
+          .thenAnswer((_) async => 'A');
+      when(() => store.read(SecureStore.kRefreshToken))
+          .thenAnswer((_) async => 'R');
+      when(() => store.read(SecureStore.kFingerprint))
+          .thenAnswer((_) async => '');
+      when(() => store.read(SecureStore.kMfaEnabled))
+          .thenAnswer((_) async => null);
+
+      final session = await repo.restoreSession();
+      expect(session?.mfaEnabled, isFalse);
     });
   });
 
   group('signOut', () {
-    test('purges secure storage', () async {
+    test('clears session state via purgeSession, NOT purgeAll', () async {
+      // Load-bearing invariant: sign-out MUST preserve the identity
+      // state so a same-account re-login can still decrypt K_files.
       await repo.signOut();
-      verify(() => store.purgeAuth()).called(1);
+      verify(() => store.purgeSession()).called(1);
+      verifyNever(() => store.purgeAll());
     });
   });
 
