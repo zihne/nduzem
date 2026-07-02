@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../api/api_client.dart';
+import '../../widgets/password_form_field.dart';
 import 'auth_providers.dart';
 
 class RegisterScreen extends ConsumerStatefulWidget {
@@ -76,11 +77,10 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                     : null,
               ),
               const SizedBox(height: 12),
-              TextFormField(
+              PasswordFormField(
                 controller: _password,
-                obscureText: true,
+                labelText: 'Password',
                 autofillHints: const [AutofillHints.newPassword],
-                decoration: const InputDecoration(labelText: 'Password'),
                 validator: (v) => (v == null || v.length < 10)
                     ? 'Use at least 10 characters.'
                     : null,

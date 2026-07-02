@@ -43,6 +43,11 @@ dependencies:
   # authenticator on a separate device can point-and-scan.
   qr_flutter: ^4.1.0
 
+  # Android-only: fine-grained intent-flag control so custom-scheme
+  # launches (otpauth://) land in a fresh task instead of being
+  # absorbed into ours. `url_launcher` doesn't expose the flags.
+  android_intent_plus: ^5.3.0
+
 dev_dependencies:
   flutter_test: { sdk: flutter }
   flutter_lints: ^5.0.0

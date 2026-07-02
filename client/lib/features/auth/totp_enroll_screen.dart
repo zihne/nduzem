@@ -3,10 +3,10 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:qr_flutter/qr_flutter.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../api/api_client.dart';
 import '../../api/auth_api.dart';
+import '../../core/external_launcher.dart';
 import 'auth_providers.dart';
 
 /// Three-stage flow, matching the server contract (M1.6):
@@ -82,6 +82,10 @@ class _TotpEnrollScreenState extends ConsumerState<TotpEnrollScreen> {
     try {
       final repo = await ref.read(authRepositoryProvider.future);
       final result = await repo.mfaEnrollConfirm(code: _code.text.trim());
+      // Persist + broadcast so the home screen hides the "Enable 2FA"
+      // button when the user comes back.
+      await ref.read(authSessionProvider.notifier).markMfaEnabled(true);
+      if (!mounted) return;
       setState(() => _confirmed = result);
     } on ApiException catch (exc) {
       setState(() => _error = exc.message);
@@ -92,12 +96,11 @@ class _TotpEnrollScreenState extends ConsumerState<TotpEnrollScreen> {
 
   Future<void> _openInAuthenticator(String otpauthUrl) async {
     final messenger = ScaffoldMessenger.of(context);
-    final uri = Uri.parse(otpauthUrl);
-    final launched = await launchUrl(
-      uri,
-      mode: LaunchMode.externalApplication,
-    );
-    if (!launched) {
+    // Goes through [launchExternalUri] so on Android the authenticator
+    // gets its own task and can be closed without dragging OpaqueShare
+    // with it.
+    final result = await launchExternalUri(Uri.parse(otpauthUrl));
+    if (result == ExternalLaunchResult.noHandler) {
       messenger.showSnackBar(
         const SnackBar(
           content: Text(
