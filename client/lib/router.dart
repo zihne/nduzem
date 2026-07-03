@@ -10,6 +10,7 @@ import 'features/auth/register_screen.dart';
 import 'features/auth/totp_challenge_screen.dart';
 import 'features/auth/totp_enroll_screen.dart';
 import 'features/auth/verify_email_screen.dart';
+import 'features/billing/paywall_screen.dart';
 import 'features/home/home_screen.dart';
 import 'features/transfers/inbox_screen.dart';
 import 'features/transfers/receive_screen.dart';
@@ -86,6 +87,8 @@ final routerProvider = Provider<GoRouter>((ref) {
       // M2 transfer surface.
       GoRoute(path: '/send', builder: (_, __) => const SendScreen()),
       GoRoute(path: '/inbox', builder: (_, __) => const InboxScreen()),
+      // M3 billing surface — balance + catalog + IAP verify (stubbed).
+      GoRoute(path: '/paywall', builder: (_, __) => const PaywallScreen()),
       GoRoute(
         path: '/receive/:transferId',
         builder: (context, state) => ReceiveScreen(
