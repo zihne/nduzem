@@ -109,6 +109,12 @@ class HomeScreen extends ConsumerWidget {
                   icon: const Icon(Icons.verified_user_outlined),
                   label: const Text("Verify a contact's fingerprint"),
                 ),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  onPressed: () => context.push('/paywall'),
+                  icon: const Icon(Icons.wallet),
+                  label: const Text('Storage & credits'),
+                ),
                 if (!data.mfaEnabled) ...[
                   const SizedBox(height: 12),
                   OutlinedButton.icon(
