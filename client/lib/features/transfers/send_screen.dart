@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:mime/mime.dart' show lookupMimeType;
 
 import '../../api/api_client.dart';
@@ -40,7 +41,6 @@ class _SendScreenState extends ConsumerState<SendScreen> {
   VerifiedContact? _priorVerification;
   bool _busy = false;
   String? _error;
-  String? _info;
 
   // True while the file_picker SAF flow is running — including the
   // plugin's post-selection copy of the SAF-picked file into app
@@ -178,11 +178,17 @@ class _SendScreenState extends ConsumerState<SendScreen> {
     setState(() {
       _busy = true;
       _error = null;
-      _info = null;
       _uploadedBytes = 0;
       _totalBytes = null;
       _cancel = cancel;
     });
+    // Grab these BEFORE the async gap so they're still valid after
+    // we navigate away — the widget context becomes stale otherwise.
+    // ScaffoldMessenger sits above MaterialApp so its SnackBars keep
+    // showing across a `router.go('/')`.
+    final messenger = ScaffoldMessenger.of(context);
+    final router = GoRouter.of(context);
+    final recipientLabel = _lookup.text.trim();
     try {
       final svc = await ref.read(transferServiceProvider.future);
       final result = await svc.send(
@@ -201,14 +207,35 @@ class _SendScreenState extends ConsumerState<SendScreen> {
         },
         cancel: cancel,
       );
-      setState(
-        () => _info =
-            'Sent ${result.byteCountOnServer} bytes. Transfer '
-            '${result.transferId} is now in the recipient\'s inbox.',
+      // Success: forced acknowledgement dialog. Barrier-dismissible
+      // is false so a distracted user cannot swipe past it — the only
+      // way out is the Done button, which then navigates home. Avoids
+      // (a) leaving the primary "Encrypt and send" button pointed at
+      // the same recipient/file (accidental resend) AND (b) the
+      // snackbar auto-hiding before the user notices.
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => _SendCompleteDialog(
+          filename: file.name,
+          byteCount: result.byteCountOnServer,
+          recipientLabel: recipientLabel,
+          transferId: result.transferId,
+        ),
       );
+      router.go('/');
+      return;
     } on SendCancelledException {
-      setState(() => _info = 'Send cancelled. Server-side cleanup posted.');
+      // Cancel was user-initiated — they know it happened, no need
+      // to block on a modal. A snackbar suffices.
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Send cancelled.')),
+      );
+      router.go('/');
+      return;
     } on ApiException catch (exc) {
+      // Stay on-screen so the user can retry without re-picking.
       setState(() => _error = exc.message);
     } on Object catch (exc) {
       setState(() => _error = 'Send failed: $exc');
@@ -343,14 +370,6 @@ class _SendScreenState extends ConsumerState<SendScreen> {
                 style: TextStyle(color: Theme.of(context).colorScheme.error),
               ),
             ],
-            if (_info != null) ...[
-              const SizedBox(height: 16),
-              Text(
-                _info!,
-                style: TextStyle(color: Theme.of(context).colorScheme.primary),
-              ),
-            ],
-
           ],
         ),
       ),
@@ -373,6 +392,83 @@ class _PickedFile {
   /// bytes into memory.
   final String path;
   final int length;
+}
+
+/// Modal acknowledgement after a successful send. `barrierDismissible:
+/// false` at the caller ensures the user has to tap Done — otherwise a
+/// distracted user might miss the confirmation entirely and there's no
+/// transfer-history screen to fall back on yet (M9.x). Transfer ID is
+/// shown selectable so the user can copy it for debugging / support.
+class _SendCompleteDialog extends StatelessWidget {
+  const _SendCompleteDialog({
+    required this.filename,
+    required this.byteCount,
+    required this.recipientLabel,
+    required this.transferId,
+  });
+  final String filename;
+  final int byteCount;
+  final String recipientLabel;
+  final String transferId;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return AlertDialog(
+      icon: Icon(Icons.check_circle, color: scheme.primary, size: 32),
+      title: const Text('Transfer sent'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _DialogRow(label: 'File', value: filename),
+          const SizedBox(height: 8),
+          _DialogRow(label: 'Size', value: _prettyBytes(byteCount)),
+          const SizedBox(height: 8),
+          _DialogRow(label: 'To', value: recipientLabel),
+          const SizedBox(height: 12),
+          Text(
+            'Transfer ID',
+            style: Theme.of(context).textTheme.labelSmall,
+          ),
+          const SizedBox(height: 2),
+          SelectableText(
+            transferId,
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+          ),
+        ],
+      ),
+      actions: [
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Done'),
+        ),
+      ],
+    );
+  }
+}
+
+class _DialogRow extends StatelessWidget {
+  const _DialogRow({required this.label, required this.value});
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 56,
+          child: Text(label, style: t.labelSmall),
+        ),
+        Expanded(
+          child: Text(value, style: t.bodyMedium),
+        ),
+      ],
+    );
+  }
 }
 
 /// Multi-phase progress bar (ADR-0004). `phase` labels which stage
@@ -427,12 +523,18 @@ class _SendProgress extends StatelessWidget {
     );
   }
 
-  static String _mib(int bytes) {
-    final mib = bytes / (1024 * 1024);
-    if (mib >= 100) return '${mib.toStringAsFixed(0)} MiB';
-    if (mib >= 1) return '${mib.toStringAsFixed(1)} MiB';
-    return '${(bytes / 1024).toStringAsFixed(0)} KiB';
-  }
+  static String _mib(int bytes) => _prettyBytes(bytes);
+}
+
+/// KiB / MiB / GiB with sensible precision. Used by the progress
+/// label and the post-send confirmation SnackBar.
+String _prettyBytes(int bytes) {
+  final gib = bytes / (1024 * 1024 * 1024);
+  if (gib >= 1) return '${gib.toStringAsFixed(2)} GiB';
+  final mib = bytes / (1024 * 1024);
+  if (mib >= 100) return '${mib.toStringAsFixed(0)} MiB';
+  if (mib >= 1) return '${mib.toStringAsFixed(1)} MiB';
+  return '${(bytes / 1024).toStringAsFixed(0)} KiB';
 }
 
 /// One of three states depending on prior-verification history:
