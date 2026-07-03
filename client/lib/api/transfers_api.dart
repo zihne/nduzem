@@ -1,17 +1,23 @@
 import 'api_client.dart';
 
-/// `/v1/transfers/*` client (M2 core loop, spec §5.2 / §5.3).
+/// `/v1/transfers/*` client (M2 core loop + M4 multipart, spec §5.2 / §5.3).
 ///
 /// The server treats `wrapped_key`, `enc_header`, and `signature` as
 /// opaque bytes; the client is the only party that reads/writes them.
 /// Everything on the wire is base64-encoded per the server schema.
+///
+/// M4: `/initiate` may now return either a single-shot response
+/// (`uploadUrl` populated) or a `multipart` plan (per-part presigned
+/// URLs). See [InitiateTransferResponse] for both shapes.
 class TransfersApi {
   const TransfersApi(this._client);
   final ApiClient _client;
 
-  /// POST `/v1/transfers/initiate` — server allocates a `storage_key`,
-  /// returns a presigned PUT URL for object storage, and stamps
-  /// `expires_at`.
+  /// POST `/v1/transfers/initiate`. Response shape depends on declared
+  /// byte_count: single-shot (M2 path) or multipart (M4 path, server
+  /// ADR-0012). The two shapes are represented in the same
+  /// [InitiateTransferResponse] — exactly one of `uploadUrl` /
+  /// `multipart` is populated.
   Future<InitiateTransferResponse> initiate({
     required String recipientId,
     required int byteCount,
@@ -37,31 +43,56 @@ class TransfersApi {
         'max_downloads': maxDownloads,
       },
     );
-    final multipart = body['multipart'];
-    if (multipart != null) {
-      throw StateError(
-        'Server returned a multipart plan; M2 client only handles '
-        'single-shot PUT uploads. Try a smaller file.',
+    final multipartJson = body['multipart'];
+    MultipartUploadPlan? multipart;
+    if (multipartJson != null) {
+      multipart = MultipartUploadPlan.fromJson(
+        multipartJson as Map<String, dynamic>,
       );
     }
     return InitiateTransferResponse(
       transferId: body['transfer_id'] as String,
       storageKey: body['storage_key'] as String,
-      uploadUrl: body['upload_url'] as String,
+      uploadUrl: body['upload_url'] as String?,
+      multipart: multipart,
     );
   }
 
-  /// POST `/v1/transfers/{id}/commit` — server does a HEAD on the
-  /// stored object, measures the real byte_count, charges the sender's
-  /// quota, and marks `uploaded`.
-  Future<CommitTransferResponse> commit(String transferId) async {
+  /// POST `/v1/transfers/{id}/commit`. Body is required for multipart
+  /// (per-part ETags) and omitted for single-shot. The server calls
+  /// `CompleteMultipartUpload` under the hood on the multipart branch
+  /// before HEADing for the real byte_count.
+  Future<CommitTransferResponse> commit(
+    String transferId, {
+    List<CommitPart>? parts,
+  }) async {
     final body = await _client.post(
       '/v1/transfers/$transferId/commit',
       authed: true,
+      body: parts == null
+          ? null
+          : {
+              'parts': [
+                for (final p in parts)
+                  {'part_number': p.partNumber, 'etag': p.etag},
+              ],
+            },
     );
     return CommitTransferResponse(
       status: body['status'] as String,
       byteCount: (body['byte_count'] as num).toInt(),
+    );
+  }
+
+  /// POST `/v1/transfers/{id}/abort` — client-initiated cleanup of an
+  /// in-flight multipart upload. Idempotent per server ADR-0012, so a
+  /// double-abort on race conditions is safe. Should be called when
+  /// the user cancels a large upload or when any post-`/initiate`
+  /// step throws.
+  Future<void> abort(String transferId) async {
+    await _client.post(
+      '/v1/transfers/$transferId/abort',
+      authed: true,
     );
   }
 
@@ -109,15 +140,78 @@ class TransfersApi {
 
 // --- domain types --------------------------------------------------------
 
+/// Two-shape response from `/initiate` (server ADR-0012). Exactly one
+/// of [uploadUrl] and [multipart] is non-null. Callers use the null
+/// check as the branch predicate — no explicit tag field.
 class InitiateTransferResponse {
   const InitiateTransferResponse({
     required this.transferId,
     required this.storageKey,
     required this.uploadUrl,
+    required this.multipart,
   });
   final String transferId;
   final String storageKey;
-  final String uploadUrl;
+
+  /// Single-shot presigned PUT URL. Non-null iff `byte_count`
+  /// declared at initiate ≤ server's `MULTIPART_THRESHOLD_BYTES`.
+  final String? uploadUrl;
+
+  /// Per-part presigned URLs + upload id. Non-null iff `byte_count`
+  /// > threshold. Client PUTs each part sequentially, captures the
+  /// per-part ETag, then calls `/commit` with the parts list.
+  final MultipartUploadPlan? multipart;
+}
+
+/// One presigned URL per part number. Parts are 1-indexed per the S3
+/// multipart contract; part_number matches what will be sent back on
+/// `/commit`.
+class MultipartUploadPlan {
+  const MultipartUploadPlan({
+    required this.uploadId,
+    required this.partSize,
+    required this.parts,
+  });
+
+  /// Opaque server-side identifier for the S3 multipart upload
+  /// session. Round-tripped to `/abort` / `/commit`.
+  final String uploadId;
+
+  /// Bytes per non-final part. The last part may be smaller; every
+  /// other part must be exactly `partSize` bytes. S3's minimum is
+  /// 5 MiB — server enforces that at initiate.
+  final int partSize;
+  final List<MultipartPartUrl> parts;
+
+  static MultipartUploadPlan fromJson(Map<String, dynamic> m) =>
+      MultipartUploadPlan(
+        uploadId: m['upload_id'] as String,
+        partSize: (m['part_size'] as num).toInt(),
+        parts: (m['parts'] as List<dynamic>)
+            .cast<Map<String, dynamic>>()
+            .map(MultipartPartUrl.fromJson)
+            .toList(growable: false),
+      );
+}
+
+class MultipartPartUrl {
+  const MultipartPartUrl({required this.partNumber, required this.url});
+  final int partNumber;
+  final String url;
+
+  static MultipartPartUrl fromJson(Map<String, dynamic> m) =>
+      MultipartPartUrl(
+        partNumber: (m['part_number'] as num).toInt(),
+        url: m['url'] as String,
+      );
+}
+
+/// One part's ETag as reported by S3 in the response header. Sent
+/// back on `/commit` so the server can call `CompleteMultipartUpload`.
+class CommitPart {
+  const CommitPart({required this.partNumber, required this.etag});
+  final int partNumber;
+  final String etag;
 }
 
 class CommitTransferResponse {

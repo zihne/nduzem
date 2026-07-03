@@ -11,6 +11,7 @@ import '../../api/users_api.dart';
 import '../../crypto/fingerprint.dart';
 import '../auth/auth_providers.dart';
 import '../verify_contact/verified_contacts_repo.dart';
+import 'transfer_service.dart';
 
 /// M2 send flow (spec §5.2). Three visible stages inside one screen:
 ///
@@ -41,6 +42,12 @@ class _SendScreenState extends ConsumerState<SendScreen> {
   bool _busy = false;
   String? _error;
   String? _info;
+
+  // M4 upload progress. Non-null while a send is in flight. Cleared
+  // on completion, error, or cancel.
+  int? _uploadedBytes;
+  int? _totalBytes;
+  CancelToken? _cancel;
 
   @override
   void dispose() {
@@ -133,10 +140,14 @@ class _SendScreenState extends ConsumerState<SendScreen> {
     final file = _file;
     final recipient = _recipient;
     if (file == null || recipient == null) return;
+    final cancel = CancelToken();
     setState(() {
       _busy = true;
       _error = null;
       _info = null;
+      _uploadedBytes = 0;
+      _totalBytes = null;
+      _cancel = cancel;
     });
     try {
       final svc = await ref.read(transferServiceProvider.future);
@@ -145,19 +156,40 @@ class _SendScreenState extends ConsumerState<SendScreen> {
         plaintext: file.bytes,
         filename: file.name,
         mime: file.mime,
+        onProgress: (uploaded, total) {
+          if (!mounted) return;
+          setState(() {
+            _uploadedBytes = uploaded;
+            _totalBytes = total;
+          });
+        },
+        cancel: cancel,
       );
       setState(
         () => _info =
             'Sent ${result.byteCountOnServer} bytes. Transfer '
             '${result.transferId} is now in the recipient\'s inbox.',
       );
+    } on SendCancelledException {
+      setState(() => _info = 'Send cancelled. Server-side cleanup posted.');
     } on ApiException catch (exc) {
       setState(() => _error = exc.message);
     } on Object catch (exc) {
       setState(() => _error = 'Send failed: $exc');
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _uploadedBytes = null;
+          _totalBytes = null;
+          _cancel = null;
+        });
+      }
     }
+  }
+
+  void _cancelSend() {
+    _cancel?.cancel();
   }
 
   @override
@@ -232,17 +264,29 @@ class _SendScreenState extends ConsumerState<SendScreen> {
                 prior: _priorVerification,
               ),
               const SizedBox(height: 16),
-              FilledButton.icon(
-                onPressed: _busy || _file == null ? null : _send,
-                icon: const Icon(Icons.send),
-                label: _busy
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('Encrypt and send'),
-              ),
+              if (_busy && _cancel != null) ...[
+                _SendProgress(
+                  uploadedBytes: _uploadedBytes,
+                  totalBytes: _totalBytes,
+                ),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  onPressed: _cancelSend,
+                  icon: const Icon(Icons.cancel),
+                  label: const Text('Cancel upload'),
+                ),
+              ] else
+                FilledButton.icon(
+                  onPressed: _busy || _file == null ? null : _send,
+                  icon: const Icon(Icons.send),
+                  label: _busy
+                      ? const SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Encrypt and send'),
+                ),
             ],
 
             if (_error != null) ...[
@@ -276,6 +320,48 @@ class _PickedFile {
   final String name;
   final String? mime;
   final Uint8List bytes;
+}
+
+/// Per-part upload progress. On the single-shot (M2) path this shows
+/// an indeterminate bar until the one PUT lands; on multipart it
+/// updates once per part with a real fraction.
+class _SendProgress extends StatelessWidget {
+  const _SendProgress({
+    required this.uploadedBytes,
+    required this.totalBytes,
+  });
+  final int? uploadedBytes;
+  final int? totalBytes;
+
+  @override
+  Widget build(BuildContext context) {
+    final total = totalBytes;
+    final uploaded = uploadedBytes;
+    double? value;
+    String label;
+    if (total != null && total > 0 && uploaded != null) {
+      value = (uploaded / total).clamp(0.0, 1.0);
+      label = '${_mib(uploaded)} / ${_mib(total)}'
+          ' (${(value * 100).toStringAsFixed(0)}%)';
+    } else {
+      label = 'Uploading…';
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        LinearProgressIndicator(value: value),
+        const SizedBox(height: 6),
+        Text(label, style: Theme.of(context).textTheme.bodySmall),
+      ],
+    );
+  }
+
+  static String _mib(int bytes) {
+    final mib = bytes / (1024 * 1024);
+    if (mib >= 100) return '${mib.toStringAsFixed(0)} MiB';
+    if (mib >= 1) return '${mib.toStringAsFixed(1)} MiB';
+    return '${(bytes / 1024).toStringAsFixed(0)} KiB';
+  }
 }
 
 /// One of three states depending on prior-verification history:
