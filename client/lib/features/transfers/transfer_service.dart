@@ -110,6 +110,13 @@ class TransferService {
 
     final ciphertextFile = File(enc.ciphertextPath);
     try {
+      // Post-encrypt / pre-upload phase — enc_header + seal + sign +
+      // /initiate. On a multi-GB file the /initiate call presigns
+      // ~700 URLs server-side and produces a ~90 KB response body,
+      // easily a few seconds. Fire an indeterminate phase so the UI
+      // doesn't sit at "Encrypting 100%" during that gap.
+      onProgress?.call(SendPhase.preparing, 0, 0);
+
       // 3. Build enc_header (encrypted metadata blob).
       final encHeader = _envelope.buildEncHeader(
         filename: filename,
@@ -457,14 +464,21 @@ class SendCancelledException implements Exception {
   String toString() => 'Send cancelled by user.';
 }
 
-/// Two phases the send progresses through (ADR-0004). The
-/// service-to-UI progress callback fires with the current phase so
-/// the screen can label it and reset the bar between them.
+/// Phases the send progresses through (ADR-0004). The service-to-UI
+/// progress callback fires with the current phase so the screen can
+/// label it and reset the bar between phase transitions.
 enum SendPhase {
   /// Streaming the plaintext through secretstream into a temp
   /// ciphertext file. `done` = plaintext bytes read; `total` = the
   /// declared plaintext length.
   encrypting,
+
+  /// Post-encrypt, pre-upload gap: building `enc_header`, sealing
+  /// K_file, signing, and POSTing `/initiate` (which presigns one
+  /// URL per multipart part — non-trivial round-trip for a
+  /// multi-GB file with ~700 parts). Progress is indeterminate;
+  /// `done` and `total` are both 0.
+  preparing,
 
   /// PUTting the temp ciphertext file to object storage — one part
   /// at a time on the multipart branch, or one PUT on single-shot.

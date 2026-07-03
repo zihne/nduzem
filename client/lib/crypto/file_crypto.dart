@@ -236,11 +236,23 @@ class FileCrypto {
       hasher.add(magicPrefix);
       ciphertextLength += magicPrefix.length;
 
+      // Throttle the progress callback: `File.openRead()` emits ~64 KiB
+      // chunks by default, so on a multi-GB file we'd fire onProgress
+      // several thousand times per second. That's not free — each call
+      // marks the UI dirty. Emit at most every ~250 ms plus a
+      // guaranteed final 100 % tick when the read completes.
       var plaintextRead = 0;
+      var lastEmitAt = DateTime.now();
+      const emitEvery = Duration(milliseconds: 250);
       final plaintextStream = source.openRead().map<List<int>>((chunk) {
         throwIfCancelled?.call();
         plaintextRead += chunk.length;
-        onProgress?.call(plaintextRead, totalBytes);
+        final now = DateTime.now();
+        final done = plaintextRead == totalBytes;
+        if (done || now.difference(lastEmitAt) >= emitEvery) {
+          lastEmitAt = now;
+          onProgress?.call(plaintextRead, totalBytes);
+        }
         return chunk;
       });
 
