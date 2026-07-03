@@ -56,24 +56,32 @@ class _SendScreenState extends ConsumerState<SendScreen> {
   }
 
   Future<void> _pickFile() async {
-    final res = await FilePicker.platform.pickFiles(withData: true);
+    // `withData: false` so the plugin does NOT eagerly load the whole
+    // file into an in-memory Uint8List at pick time. On large files
+    // (~70 MB+ on Android) the eager path OOMs the process before we
+    // ever get control. We always read from the returned path
+    // instead — one allocation, and only when the user commits.
+    final res = await FilePicker.platform.pickFiles(withData: false);
     if (res == null || res.files.isEmpty) return;
     final f = res.files.single;
-    Uint8List? bytes = f.bytes;
-    // On some platforms `withData: true` isn't honoured for big files;
-    // fall back to reading the path.
-    if (bytes == null && f.path != null) {
-      bytes = await File(f.path!).readAsBytes();
+    if (f.path == null) {
+      setState(
+        () => _error = 'Could not read that file — no path was returned.',
+      );
+      return;
     }
-    if (bytes == null) {
-      setState(() => _error = 'Could not read that file.');
+    final Uint8List bytes;
+    try {
+      bytes = await File(f.path!).readAsBytes();
+    } on Object catch (exc) {
+      setState(() => _error = 'Could not read that file: $exc');
       return;
     }
     setState(() {
       _file = _PickedFile(
         name: f.name,
         mime: lookupMimeType(f.name),
-        bytes: bytes!,
+        bytes: bytes,
       );
       _error = null;
     });
