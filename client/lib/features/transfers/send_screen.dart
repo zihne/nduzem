@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -43,8 +42,11 @@ class _SendScreenState extends ConsumerState<SendScreen> {
   String? _error;
   String? _info;
 
-  // M4 upload progress. Non-null while a send is in flight. Cleared
-  // on completion, error, or cancel.
+  // M4 send progress. Non-null while a send is in flight. Cleared on
+  // completion, error, or cancel. `_phase` distinguishes the
+  // encrypt phase from the upload phase so the UI can label + reset
+  // the bar between them (ADR-0004).
+  SendPhase? _phase;
   int? _uploadedBytes;
   int? _totalBytes;
   CancelToken? _cancel;
@@ -56,11 +58,9 @@ class _SendScreenState extends ConsumerState<SendScreen> {
   }
 
   Future<void> _pickFile() async {
-    // `withData: false` so the plugin does NOT eagerly load the whole
-    // file into an in-memory Uint8List at pick time. On large files
-    // (~70 MB+ on Android) the eager path OOMs the process before we
-    // ever get control. We always read from the returned path
-    // instead — one allocation, and only when the user commits.
+    // `withData: false` so the plugin doesn't eagerly load bytes at
+    // pick time. Streaming send (ADR-0004) reads the file on demand
+    // — the screen only needs the path, name, mime, and length.
     final res = await FilePicker.platform.pickFiles(withData: false);
     if (res == null || res.files.isEmpty) return;
     final f = res.files.single;
@@ -70,18 +70,19 @@ class _SendScreenState extends ConsumerState<SendScreen> {
       );
       return;
     }
-    final Uint8List bytes;
+    final int size;
     try {
-      bytes = await File(f.path!).readAsBytes();
+      size = await File(f.path!).length();
     } on Object catch (exc) {
-      setState(() => _error = 'Could not read that file: $exc');
+      setState(() => _error = 'Could not stat that file: $exc');
       return;
     }
     setState(() {
       _file = _PickedFile(
         name: f.name,
         mime: lookupMimeType(f.name),
-        bytes: bytes,
+        path: f.path!,
+        length: size,
       );
       _error = null;
     });
@@ -161,13 +162,15 @@ class _SendScreenState extends ConsumerState<SendScreen> {
       final svc = await ref.read(transferServiceProvider.future);
       final result = await svc.send(
         recipient: recipient,
-        plaintext: file.bytes,
+        plaintextPath: file.path,
+        plaintextLength: file.length,
         filename: file.name,
         mime: file.mime,
-        onProgress: (uploaded, total) {
+        onProgress: (phase, done, total) {
           if (!mounted) return;
           setState(() {
-            _uploadedBytes = uploaded;
+            _phase = phase;
+            _uploadedBytes = done;
             _totalBytes = total;
           });
         },
@@ -222,7 +225,7 @@ class _SendScreenState extends ConsumerState<SendScreen> {
             if (_file != null) ...[
               const SizedBox(height: 4),
               Text(
-                '${_file!.bytes.length} bytes'
+                '${_file!.length} bytes'
                 '${_file!.mime == null ? '' : ' · ${_file!.mime}'}',
                 style: const TextStyle(fontStyle: FontStyle.italic),
               ),
@@ -274,14 +277,15 @@ class _SendScreenState extends ConsumerState<SendScreen> {
               const SizedBox(height: 16),
               if (_busy && _cancel != null) ...[
                 _SendProgress(
-                  uploadedBytes: _uploadedBytes,
-                  totalBytes: _totalBytes,
+                  phase: _phase,
+                  done: _uploadedBytes,
+                  total: _totalBytes,
                 ),
                 const SizedBox(height: 12),
                 OutlinedButton.icon(
                   onPressed: _cancelSend,
                   icon: const Icon(Icons.cancel),
-                  label: const Text('Cancel upload'),
+                  label: const Text('Cancel'),
                 ),
               ] else
                 FilledButton.icon(
@@ -323,36 +327,52 @@ class _PickedFile {
   const _PickedFile({
     required this.name,
     required this.mime,
-    required this.bytes,
+    required this.path,
+    required this.length,
   });
   final String name;
   final String? mime;
-  final Uint8List bytes;
+
+  /// Filesystem path of the plaintext file. The streaming send flow
+  /// reads chunks straight from here; the screen never loads the
+  /// bytes into memory.
+  final String path;
+  final int length;
 }
 
-/// Per-part upload progress. On the single-shot (M2) path this shows
-/// an indeterminate bar until the one PUT lands; on multipart it
-/// updates once per part with a real fraction.
+/// Two-phase progress bar (ADR-0004). `phase` labels which stage of
+/// the send we're in — encrypting (streaming plaintext through
+/// secretstream into a temp file) vs uploading (PUTting parts). The
+/// bar reset between phases makes the transition visually obvious.
 class _SendProgress extends StatelessWidget {
   const _SendProgress({
-    required this.uploadedBytes,
-    required this.totalBytes,
+    required this.phase,
+    required this.done,
+    required this.total,
   });
-  final int? uploadedBytes;
-  final int? totalBytes;
+  final SendPhase? phase;
+  final int? done;
+  final int? total;
 
   @override
   Widget build(BuildContext context) {
-    final total = totalBytes;
-    final uploaded = uploadedBytes;
+    final t = total;
+    final d = done;
     double? value;
+    if (t != null && t > 0 && d != null) {
+      value = (d / t).clamp(0.0, 1.0);
+    }
+    final phaseLabel = switch (phase) {
+      SendPhase.encrypting => 'Encrypting',
+      SendPhase.uploading => 'Uploading',
+      null => 'Preparing…',
+    };
     String label;
-    if (total != null && total > 0 && uploaded != null) {
-      value = (uploaded / total).clamp(0.0, 1.0);
-      label = '${_mib(uploaded)} / ${_mib(total)}'
+    if (value != null && d != null && t != null) {
+      label = '$phaseLabel · ${_mib(d)} / ${_mib(t)}'
           ' (${(value * 100).toStringAsFixed(0)}%)';
     } else {
-      label = 'Uploading…';
+      label = '$phaseLabel…';
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,

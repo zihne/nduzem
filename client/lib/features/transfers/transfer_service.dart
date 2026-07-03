@@ -1,7 +1,9 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
 
 import '../../api/api_client.dart';
 import '../../api/transfers_api.dart';
@@ -66,125 +68,159 @@ class TransferService {
 
   // --- SEND -------------------------------------------------------------
 
-  /// Encrypt, upload, and commit a transfer. Handles both the M2
-  /// single-shot path and the M4 multipart path — the server decides
-  /// which one based on declared byte_count.
+  /// Encrypt, upload, and commit a transfer. Streaming from disk:
+  /// plaintext is read chunk-by-chunk from `plaintextPath` through
+  /// secretstream into a temp file, then that temp file is uploaded
+  /// part-by-part (multipart) or in one shot (< 5 MiB). Peak memory
+  /// ≈ 8 MiB regardless of file size (ADR-0004).
   ///
-  /// `onProgress` fires with `(uploadedBytes, totalBytes)` after each
-  /// part upload (single-shot: one final 100 % tick).
+  /// `onProgress` fires with `(phase, done, total)`:
+  ///   - `SendPhase.encrypting`: `done` = plaintext bytes read,
+  ///     `total` = `plaintextLength`.
+  ///   - `SendPhase.uploading`: `done` = ciphertext bytes PUT,
+  ///     `total` = final ciphertext size.
   ///
-  /// `cancel` lets the caller interrupt between part PUTs. Cancels
-  /// after `/initiate` POST `/abort` before propagating so R2's
-  /// in-flight parts are cleaned up immediately.
+  /// `cancel` is checked between plaintext-read chunks and between
+  /// part PUTs. Cancels after `/initiate` POST `/abort` before
+  /// propagating so R2's in-flight parts are cleaned up immediately.
   Future<SendResult> send({
     required UserLookup recipient,
-    required Uint8List plaintext,
+    required String plaintextPath,
+    required int plaintextLength,
     required String filename,
     String? mime,
-    void Function(int uploadedBytes, int totalBytes)? onProgress,
+    void Function(SendPhase phase, int done, int total)? onProgress,
     CancelToken? cancel,
   }) async {
     // 1. Fresh K_file for this transfer.
     final fileKey = _fileCrypto.generateFileKey();
 
-    // 2. Encrypt file body into the OS4S container + hash the wire bytes.
-    final ciphertext = await _fileCrypto.encryptFile(
-      plaintext: plaintext,
+    // 2. Stream-encrypt plaintext → temp file, rolling SHA-256 in the
+    // same pass. Peak memory ≈ one 64 KiB secretstream chunk.
+    onProgress?.call(SendPhase.encrypting, 0, plaintextLength);
+    final tempDir = await getTemporaryDirectory();
+    final enc = await _fileCrypto.encryptFileToTempFile(
+      plaintextPath: plaintextPath,
       key: fileKey,
-    );
-    final blobSha256 = _fileCrypto.sha256Hex(ciphertext);
-
-    // 3. Build enc_header (encrypted metadata blob).
-    final encHeader = _envelope.buildEncHeader(
-      filename: filename,
-      mime: mime,
-      plaintextLength: plaintext.length,
-      blobSha256Hex: blobSha256,
-      fileKey: fileKey,
+      tempDir: tempDir,
+      throwIfCancelled: cancel?.throwIfCancelled,
+      onProgress: (done, total) =>
+          onProgress?.call(SendPhase.encrypting, done, total),
     );
 
-    // 4. Seal K_file for the recipient (crypto_box_seal).
-    final sealed = _sealedBox.seal(
-      message: fileKey,
-      recipientIdentityPublic: recipient.identityPublic,
-    );
-
-    // 5. Sign blob_sha256 with our Ed25519 signing_priv.
-    final signingPriv = await _storage.readBytes(SecureStore.kSigningPrivate);
-    if (signingPriv == null) {
-      throw StateError(
-        'No signing private key on device. Register or sign in from the '
-        'device where this account was created.',
-      );
-    }
-    final signature = _envelope.signBlobSha256(
-      blobSha256Hex: blobSha256,
-      signingPrivate: signingPriv,
-    );
-
-    // 6. Initiate on the server. Response is either single-shot or
-    // multipart shape — same envelope, different upload path.
-    final initiated = await _transfers.initiate(
-      recipientId: recipient.userId,
-      byteCount: ciphertext.length,
-      blobSha256Hex: blobSha256,
-      wrappedKeyB64: base64Encode(sealed),
-      encHeaderB64: base64Encode(encHeader),
-      signatureB64: base64Encode(signature),
-    );
-
-    // 7 + 8. Upload + commit. Anything from here that throws MUST call
-    // /abort on the multipart branch so R2 doesn't hold in-flight
-    // parts open until the server's 6-hour sweeper runs.
+    final ciphertextFile = File(enc.ciphertextPath);
     try {
-      if (initiated.multipart != null) {
-        return await _sendMultipart(
-          transferId: initiated.transferId,
-          ciphertext: ciphertext,
-          plan: initiated.multipart!,
-          onProgress: onProgress,
-          cancel: cancel,
+      // 3. Build enc_header (encrypted metadata blob).
+      final encHeader = _envelope.buildEncHeader(
+        filename: filename,
+        mime: mime,
+        plaintextLength: plaintextLength,
+        blobSha256Hex: enc.blobSha256Hex,
+        fileKey: fileKey,
+      );
+
+      // 4. Seal K_file for the recipient (crypto_box_seal).
+      final sealed = _sealedBox.seal(
+        message: fileKey,
+        recipientIdentityPublic: recipient.identityPublic,
+      );
+
+      // 5. Sign blob_sha256 with our Ed25519 signing_priv.
+      final signingPriv = await _storage.readBytes(SecureStore.kSigningPrivate);
+      if (signingPriv == null) {
+        throw StateError(
+          'No signing private key on device. Register or sign in from the '
+          'device where this account was created.',
         );
       }
-      return await _sendSingleShot(
-        transferId: initiated.transferId,
-        ciphertext: ciphertext,
-        uploadUrl: initiated.uploadUrl!,
-        onProgress: onProgress,
-        cancel: cancel,
+      final signature = _envelope.signBlobSha256(
+        blobSha256Hex: enc.blobSha256Hex,
+        signingPrivate: signingPriv,
       );
-    } on Object {
-      // Best-effort cleanup — a failure to abort still lets the
-      // orphan sweeper reclaim in the background. Don't swallow the
-      // outer exception, whatever it is, on abort failure.
+
+      // 6. Initiate on the server. Response is either single-shot or
+      // multipart shape — same envelope, different upload path.
+      final initiated = await _transfers.initiate(
+        recipientId: recipient.userId,
+        byteCount: enc.ciphertextLength,
+        blobSha256Hex: enc.blobSha256Hex,
+        wrappedKeyB64: base64Encode(sealed),
+        encHeaderB64: base64Encode(encHeader),
+        signatureB64: base64Encode(signature),
+      );
+
+      // 7 + 8. Upload + commit. Anything from here that throws MUST
+      // call /abort on the multipart branch so R2 doesn't hold
+      // in-flight parts open until the server's 6-hour sweeper runs.
+      onProgress?.call(SendPhase.uploading, 0, enc.ciphertextLength);
       try {
-        await _transfers.abort(initiated.transferId);
+        if (initiated.multipart != null) {
+          return await _sendMultipartFromFile(
+            transferId: initiated.transferId,
+            ciphertextFile: ciphertextFile,
+            ciphertextLength: enc.ciphertextLength,
+            plan: initiated.multipart!,
+            onProgress: (up, total) =>
+                onProgress?.call(SendPhase.uploading, up, total),
+            cancel: cancel,
+          );
+        }
+        return await _sendSingleShotFromFile(
+          transferId: initiated.transferId,
+          ciphertextFile: ciphertextFile,
+          ciphertextLength: enc.ciphertextLength,
+          uploadUrl: initiated.uploadUrl!,
+          onProgress: (up, total) =>
+              onProgress?.call(SendPhase.uploading, up, total),
+          cancel: cancel,
+        );
+      } on Object {
+        // Best-effort cleanup — a failure to abort still lets the
+        // orphan sweeper reclaim in the background. Don't swallow
+        // the outer exception, whatever it is.
+        try {
+          await _transfers.abort(initiated.transferId);
+        } on Object {
+          // ignore
+        }
+        rethrow;
+      }
+    } finally {
+      // Always drop the temp ciphertext file — success, cancel, or
+      // failure. A process-kill leak is backstopped by the OS's
+      // own cache reclamation.
+      try {
+        if (await ciphertextFile.exists()) {
+          await ciphertextFile.delete();
+        }
       } on Object {
         // ignore
       }
-      rethrow;
     }
   }
 
-  Future<SendResult> _sendSingleShot({
+  Future<SendResult> _sendSingleShotFromFile({
     required String transferId,
-    required Uint8List ciphertext,
+    required File ciphertextFile,
+    required int ciphertextLength,
     required String uploadUrl,
     required void Function(int, int)? onProgress,
     required CancelToken? cancel,
   }) async {
     cancel?.throwIfCancelled();
-    final putRes = await _httpClient.put(
-      Uri.parse(uploadUrl),
-      body: ciphertext,
-    );
+    // Under the 5 MiB threshold — fits comfortably in memory. Reading
+    // the whole file is simpler than a streamed PUT and avoids the
+    // `http.StreamedRequest` complications for a fast path that
+    // doesn't need them.
+    final body = await ciphertextFile.readAsBytes();
+    final putRes = await _httpClient.put(Uri.parse(uploadUrl), body: body);
     if (putRes.statusCode < 200 || putRes.statusCode >= 300) {
       throw ApiException(
         statusCode: putRes.statusCode,
         message: 'Upload to storage failed (HTTP ${putRes.statusCode}).',
       );
     }
-    onProgress?.call(ciphertext.length, ciphertext.length);
+    onProgress?.call(ciphertextLength, ciphertextLength);
 
     cancel?.throwIfCancelled();
     final committed = await _transfers.commit(transferId);
@@ -195,57 +231,59 @@ class TransferService {
     );
   }
 
-  Future<SendResult> _sendMultipart({
+  Future<SendResult> _sendMultipartFromFile({
     required String transferId,
-    required Uint8List ciphertext,
+    required File ciphertextFile,
+    required int ciphertextLength,
     required MultipartUploadPlan plan,
     required void Function(int, int)? onProgress,
     required CancelToken? cancel,
   }) async {
-    final parts = <CommitPart>[];
-    var uploadedBytes = 0;
-    for (final partUrl in plan.parts) {
-      cancel?.throwIfCancelled();
-      // Slice the ciphertext for this part. Non-final parts are
-      // exactly `plan.partSize` bytes per S3 contract; the last part
-      // may be shorter (`plan.parts.length * plan.partSize` may exceed
-      // ciphertext.length).
-      final offset = (partUrl.partNumber - 1) * plan.partSize;
-      if (offset >= ciphertext.length) {
-        // We got more part URLs than actually needed — happens when
-        // the ciphertext ended up smaller than the client's original
-        // byte_count declaration. Safe to skip.
-        continue;
+    final raf = await ciphertextFile.open(mode: FileMode.read);
+    try {
+      final parts = <CommitPart>[];
+      var uploadedBytes = 0;
+      for (final partUrl in plan.parts) {
+        cancel?.throwIfCancelled();
+        final offset = (partUrl.partNumber - 1) * plan.partSize;
+        if (offset >= ciphertextLength) {
+          // Extra part URL beyond what we actually need. Safe skip.
+          continue;
+        }
+        final remaining = ciphertextLength - offset;
+        final len = remaining < plan.partSize ? remaining : plan.partSize;
+        await raf.setPosition(offset);
+        final body = await raf.read(len);
+        final res = await _httpClient.put(Uri.parse(partUrl.url), body: body);
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          throw ApiException(
+            statusCode: res.statusCode,
+            message: 'Upload of part ${partUrl.partNumber} failed '
+                '(HTTP ${res.statusCode}).',
+          );
+        }
+        final etag = res.headers['etag'];
+        if (etag == null || etag.isEmpty) {
+          throw StateError(
+            'Object storage did not return an ETag for part '
+            '${partUrl.partNumber}; cannot commit multipart upload.',
+          );
+        }
+        parts.add(CommitPart(partNumber: partUrl.partNumber, etag: etag));
+        uploadedBytes += body.length;
+        onProgress?.call(uploadedBytes, ciphertextLength);
       }
-      final end = (offset + plan.partSize).clamp(0, ciphertext.length);
-      final body = Uint8List.sublistView(ciphertext, offset, end);
-      final res = await _httpClient.put(Uri.parse(partUrl.url), body: body);
-      if (res.statusCode < 200 || res.statusCode >= 300) {
-        throw ApiException(
-          statusCode: res.statusCode,
-          message: 'Upload of part ${partUrl.partNumber} failed '
-              '(HTTP ${res.statusCode}).',
-        );
-      }
-      final etag = res.headers['etag'];
-      if (etag == null || etag.isEmpty) {
-        throw StateError(
-          'Object storage did not return an ETag for part '
-          '${partUrl.partNumber}; cannot commit multipart upload.',
-        );
-      }
-      parts.add(CommitPart(partNumber: partUrl.partNumber, etag: etag));
-      uploadedBytes += body.length;
-      onProgress?.call(uploadedBytes, ciphertext.length);
-    }
 
-    cancel?.throwIfCancelled();
-    final committed = await _transfers.commit(transferId, parts: parts);
-    return SendResult(
-      transferId: transferId,
-      byteCountOnServer: committed.byteCount,
-      status: committed.status,
-    );
+      cancel?.throwIfCancelled();
+      final committed = await _transfers.commit(transferId, parts: parts);
+      return SendResult(
+        transferId: transferId,
+        byteCountOnServer: committed.byteCount,
+        status: committed.status,
+      );
+    } finally {
+      await raf.close();
+    }
   }
 
   // --- INBOX ------------------------------------------------------------
@@ -417,6 +455,22 @@ class SendCancelledException implements Exception {
   const SendCancelledException();
   @override
   String toString() => 'Send cancelled by user.';
+}
+
+/// Two phases the send progresses through (ADR-0004). The
+/// service-to-UI progress callback fires with the current phase so
+/// the screen can label it and reset the bar between them.
+enum SendPhase {
+  /// Streaming the plaintext through secretstream into a temp
+  /// ciphertext file. `done` = plaintext bytes read; `total` = the
+  /// declared plaintext length.
+  encrypting,
+
+  /// PUTting the temp ciphertext file to object storage — one part
+  /// at a time on the multipart branch, or one PUT on single-shot.
+  /// `done` = ciphertext bytes uploaded; `total` = final ciphertext
+  /// size.
+  uploading,
 }
 
 // --- domain result types -------------------------------------------------

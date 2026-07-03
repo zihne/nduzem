@@ -24,3 +24,4 @@ Status conventions:
 | [0001](0001-m1-client-architecture.md) | M1 — client architecture (Riverpod + go_router + libsodium) | Accepted |
 | [0002](0002-m3.3-play-billing-client.md) | M3.3 — Play Billing client integration | Accepted |
 | [0003](0003-m4-client-multipart.md) | M4 — client chunked secretstream + multipart upload | Accepted |
+| [0004](0004-m4-streaming-send.md) | M4 — client streaming send from disk | Accepted |
