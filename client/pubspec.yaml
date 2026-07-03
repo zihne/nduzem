@@ -66,6 +66,12 @@ dependencies:
   # ADR-0002.
   in_app_purchase: ^3.2.0
 
+  # M4: partial wakelock during send so a screen-off phone doesn't lose
+  # CPU (and its in-flight upload) to Doze. Doesn't defend against the
+  # OS freezing us when we're truly backgrounded — that's a foreground-
+  # service concern for later.
+  wakelock_plus: ^1.2.10
+
 dev_dependencies:
   flutter_test: { sdk: flutter }
   flutter_lints: ^5.0.0

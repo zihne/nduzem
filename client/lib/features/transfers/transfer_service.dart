@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../api/api_client.dart';
 import '../../api/transfers_api.dart';
@@ -92,24 +93,39 @@ class TransferService {
     void Function(SendPhase phase, int done, int total)? onProgress,
     CancelToken? cancel,
   }) async {
-    // 1. Fresh K_file for this transfer.
-    final fileKey = _fileCrypto.generateFileKey();
-
-    // 2. Stream-encrypt plaintext → temp file, rolling SHA-256 in the
-    // same pass. Peak memory ≈ one 64 KiB secretstream chunk.
-    onProgress?.call(SendPhase.encrypting, 0, plaintextLength);
-    final tempDir = await getTemporaryDirectory();
-    final enc = await _fileCrypto.encryptFileToTempFile(
-      plaintextPath: plaintextPath,
-      key: fileKey,
-      tempDir: tempDir,
-      throwIfCancelled: cancel?.throwIfCancelled,
-      onProgress: (done, total) =>
-          onProgress?.call(SendPhase.encrypting, done, total),
-    );
-
-    final ciphertextFile = File(enc.ciphertextPath);
+    // Partial wakelock across the whole send. Multi-GB uploads run
+    // for minutes; if the user pockets the phone the screen goes off
+    // and Android's Doze can otherwise starve our upload of CPU /
+    // network. Wakelock keeps the CPU awake even with the screen
+    // off. It does NOT protect against the App Freezer if the user
+    // switches to a different app — that's a foreground-service job
+    // (deferred). Wrap in try/catch so a platform without wakelock
+    // support (test host, headless CI) doesn't break the send.
     try {
+      await WakelockPlus.enable();
+    } on Object {
+      // ignore — upload works fine without a wakelock, just less
+      // resilient to screen-off scenarios.
+    }
+    try {
+      // 1. Fresh K_file for this transfer.
+      final fileKey = _fileCrypto.generateFileKey();
+
+      // 2. Stream-encrypt plaintext → temp file, rolling SHA-256 in
+      // the same pass. Peak memory ≈ one 64 KiB secretstream chunk.
+      onProgress?.call(SendPhase.encrypting, 0, plaintextLength);
+      final tempDir = await getTemporaryDirectory();
+      final enc = await _fileCrypto.encryptFileToTempFile(
+        plaintextPath: plaintextPath,
+        key: fileKey,
+        tempDir: tempDir,
+        throwIfCancelled: cancel?.throwIfCancelled,
+        onProgress: (done, total) =>
+            onProgress?.call(SendPhase.encrypting, done, total),
+      );
+
+      final ciphertextFile = File(enc.ciphertextPath);
+      try {
       // Post-encrypt / pre-upload phase — enc_header + seal + sign +
       // /initiate. On a multi-GB file the /initiate call presigns
       // ~700 URLs server-side and produces a ~90 KB response body,
@@ -192,14 +208,24 @@ class TransferService {
         }
         rethrow;
       }
-    } finally {
-      // Always drop the temp ciphertext file — success, cancel, or
-      // failure. A process-kill leak is backstopped by the OS's
-      // own cache reclamation.
-      try {
-        if (await ciphertextFile.exists()) {
-          await ciphertextFile.delete();
+      } finally {
+        // Always drop the temp ciphertext file — success, cancel, or
+        // failure. A process-kill leak is backstopped by the OS's
+        // own cache reclamation.
+        try {
+          if (await ciphertextFile.exists()) {
+            await ciphertextFile.delete();
+          }
+        } on Object {
+          // ignore
         }
+      }
+    } finally {
+      // Release the wakelock regardless of outcome. Wrap in try/catch
+      // so a platform without wakelock support doesn't turn a
+      // successful send into a failure.
+      try {
+        await WakelockPlus.disable();
       } on Object {
         // ignore
       }
