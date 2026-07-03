@@ -59,7 +59,29 @@ void main() {
       expect(res.uploadUrl, startsWith('https://'));
     });
 
-    test('rejects multipart responses in M2', () async {
+    test('single-shot response leaves multipart null (ADR-0003)', () async {
+      when(
+        () => client.post(any(), body: any(named: 'body'), authed: any(named: 'authed')),
+      ).thenAnswer(
+        (_) async => <String, dynamic>{
+          'transfer_id': 't-1',
+          'storage_key': 'obj/abc',
+          'upload_url': 'https://r2.example/put',
+        },
+      );
+      final res = await api.initiate(
+        recipientId: 'u-42',
+        byteCount: 1024,
+        blobSha256Hex: 'a' * 64,
+        wrappedKeyB64: 'WK',
+        encHeaderB64: 'EH',
+        signatureB64: 'SIG',
+      );
+      expect(res.uploadUrl, isNotNull);
+      expect(res.multipart, isNull);
+    });
+
+    test('multipart response decodes upload_id + parts (ADR-0003)', () async {
       when(
         () => client.post(any(), body: any(named: 'body'), authed: any(named: 'authed')),
       ).thenAnswer(
@@ -68,23 +90,97 @@ void main() {
           'storage_key': 'obj/xyz',
           'multipart': {
             'upload_id': 'mp-1',
-            'part_size': 8,
-            'parts': <Map<String, dynamic>>[],
+            'part_size': 8388608,
+            'parts': [
+              {'part_number': 1, 'url': 'https://r2.example/put/1'},
+              {'part_number': 2, 'url': 'https://r2.example/put/2'},
+            ],
           },
         },
       );
-
-      expect(
-        () => api.initiate(
-          recipientId: 'u-42',
-          byteCount: 999999999,
-          blobSha256Hex: 'b' * 64,
-          wrappedKeyB64: 'WK',
-          encHeaderB64: 'EH',
-          signatureB64: 'SIG',
-        ),
-        throwsA(isA<StateError>()),
+      final res = await api.initiate(
+        recipientId: 'u-42',
+        byteCount: 12000000,
+        blobSha256Hex: 'b' * 64,
+        wrappedKeyB64: 'WK',
+        encHeaderB64: 'EH',
+        signatureB64: 'SIG',
       );
+      expect(res.uploadUrl, isNull);
+      expect(res.multipart, isNotNull);
+      expect(res.multipart!.uploadId, 'mp-1');
+      expect(res.multipart!.partSize, 8388608);
+      expect(res.multipart!.parts, hasLength(2));
+      expect(res.multipart!.parts[0].partNumber, 1);
+      expect(res.multipart!.parts[1].url, 'https://r2.example/put/2');
+    });
+  });
+
+  group('/v1/transfers/{id}/commit', () {
+    test('single-shot commit sends no body (M2 wire compat)', () async {
+      when(
+        () => client.post(
+          any(),
+          body: any(named: 'body'),
+          authed: any(named: 'authed'),
+        ),
+      ).thenAnswer(
+        (_) async => <String, dynamic>{'status': 'uploaded', 'byte_count': 1024},
+      );
+      await api.commit('t-1');
+      final captured = verify(
+        () => client.post(
+          '/v1/transfers/t-1/commit',
+          body: captureAny(named: 'body'),
+          authed: any(named: 'authed'),
+        ),
+      ).captured.single;
+      expect(captured, isNull);
+    });
+
+    test('multipart commit sends parts list with ETags', () async {
+      when(
+        () => client.post(
+          any(),
+          body: any(named: 'body'),
+          authed: any(named: 'authed'),
+        ),
+      ).thenAnswer(
+        (_) async =>
+            <String, dynamic>{'status': 'uploaded', 'byte_count': 12000000},
+      );
+      await api.commit(
+        't-2',
+        parts: const [
+          CommitPart(partNumber: 1, etag: 'aaaa'),
+          CommitPart(partNumber: 2, etag: 'bbbb'),
+        ],
+      );
+      final captured = verify(
+        () => client.post(
+          '/v1/transfers/t-2/commit',
+          body: captureAny(named: 'body'),
+          authed: any(named: 'authed'),
+        ),
+      ).captured.single as Map<String, dynamic>;
+      expect(captured['parts'], hasLength(2));
+      expect((captured['parts'] as List)[0], {'part_number': 1, 'etag': 'aaaa'});
+      expect((captured['parts'] as List)[1], {'part_number': 2, 'etag': 'bbbb'});
+    });
+  });
+
+  group('/v1/transfers/{id}/abort', () {
+    test('POSTs the abort endpoint (idempotent per ADR-0012)', () async {
+      when(
+        () => client.post(any(), authed: any(named: 'authed')),
+      ).thenAnswer((_) async => <String, dynamic>{});
+      await api.abort('t-3');
+      verify(
+        () => client.post(
+          '/v1/transfers/t-3/abort',
+          authed: any(named: 'authed'),
+        ),
+      ).called(1);
     });
   });
 

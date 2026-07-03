@@ -11,43 +11,27 @@ import '../../crypto/file_crypto.dart';
 import '../../crypto/sealed_box.dart';
 import '../../storage/secure_storage.dart';
 
-/// Orchestrates the M2 send + receive flows end-to-end (spec §5.2/§5.3).
+/// Orchestrates the send + receive flows end-to-end (spec §5.2/§5.3).
 ///
-/// The service is stateless — every method takes the pieces it needs and
-/// returns a small result. Screens hold the UI-level state (progress,
-/// error, chosen file, …).
+/// M4 changes (ADR-0003):
 ///
-/// **Send** (single-PUT for M2):
-///   1. Look up recipient's pubkeys.
-///   2. Generate `K_file`; encrypt file body + build enc_header.
-///   3. Seal `K_file` for the recipient.
-///   4. Sign SHA-256(ciphertext) with our signing_priv.
-///   5. POST /initiate → get presigned URL.
-///   6. PUT ciphertext to the returned upload URL.
-///   7. POST /commit.
+/// - **Send** now accepts multipart `/initiate` responses: splits the
+///   ciphertext into `part_size`-byte chunks, sequentially PUTs each,
+///   captures per-part ETags, then commits with the parts list.
+/// - Optional `onProgress` callback fires after each part upload so
+///   the UI can render a bar. On the M2 single-shot path it fires
+///   exactly once at 100 % after the single PUT succeeds.
+/// - Optional [CancelToken] lets the UI cancel a large upload; the
+///   service POSTs `/abort` before propagating.
+/// - Ciphertext format is now `crypto_secretstream_xchacha20poly1305`
+///   in the OS4S container (see [FileCrypto]).
 ///
-/// **Receive**:
-///   1. POST /download → presigned GET URL + envelope.
-///   2. GET the ciphertext.
-///   3. Verify SHA-256(ciphertext) matches `blob_sha256`.
-///   4. Unseal `wrapped_key` → K_file.
-///   5. Decrypt enc_header → filename/mime/size.
-///   6. Decrypt body → plaintext.
-///   7. Write to disk.
-///   8. POST /ack.
-///
-/// **Sender-signature verification** at receive is wired up in M2.x
-/// (ADR-0031): the download response now carries
-/// `sender_signing_pub` alongside the signature, so [receive] can
-/// verify the Ed25519 detached signature over `blob_sha256` before
-/// spending CPU on the AEAD. A mismatch is a hard-block — we refuse to
-/// decrypt on a bad signature.
-///
-/// When `sender_signing_pub` is null the sender has erased themselves
-/// (M9.5); in that case we skip verification and note it on the
-/// returned [DecryptedTransfer] so the UI can render "sender is no
-/// longer available to verify against" instead of pretending the
-/// signature was checked.
+/// **Sender-signature verification** at receive: server surfaces
+/// `sender_signing_pub` on `/download`, so [receive] verifies the
+/// Ed25519 detached signature over `blob_sha256` before decrypting.
+/// A mismatch is a hard block. When the sender has erased themselves
+/// (M9.5), the pubkey is null → skip verification and note it on the
+/// returned [DecryptedTransfer].
 class TransferService {
   const TransferService({
     required TransfersApi transfers,
@@ -82,17 +66,29 @@ class TransferService {
 
   // --- SEND -------------------------------------------------------------
 
+  /// Encrypt, upload, and commit a transfer. Handles both the M2
+  /// single-shot path and the M4 multipart path — the server decides
+  /// which one based on declared byte_count.
+  ///
+  /// `onProgress` fires with `(uploadedBytes, totalBytes)` after each
+  /// part upload (single-shot: one final 100 % tick).
+  ///
+  /// `cancel` lets the caller interrupt between part PUTs. Cancels
+  /// after `/initiate` POST `/abort` before propagating so R2's
+  /// in-flight parts are cleaned up immediately.
   Future<SendResult> send({
     required UserLookup recipient,
     required Uint8List plaintext,
     required String filename,
     String? mime,
+    void Function(int uploadedBytes, int totalBytes)? onProgress,
+    CancelToken? cancel,
   }) async {
     // 1. Fresh K_file for this transfer.
     final fileKey = _fileCrypto.generateFileKey();
 
-    // 2. Encrypt file body + compute the hash the server + envelope share.
-    final ciphertext = _fileCrypto.encryptFile(
+    // 2. Encrypt file body into the OS4S container + hash the wire bytes.
+    final ciphertext = await _fileCrypto.encryptFile(
       plaintext: plaintext,
       key: fileKey,
     );
@@ -126,7 +122,8 @@ class TransferService {
       signingPrivate: signingPriv,
     );
 
-    // 6. Initiate on the server.
+    // 6. Initiate on the server. Response is either single-shot or
+    // multipart shape — same envelope, different upload path.
     final initiated = await _transfers.initiate(
       recipientId: recipient.userId,
       byteCount: ciphertext.length,
@@ -136,9 +133,49 @@ class TransferService {
       signatureB64: base64Encode(signature),
     );
 
-    // 7. PUT the ciphertext to the presigned URL.
+    // 7 + 8. Upload + commit. Anything from here that throws MUST call
+    // /abort on the multipart branch so R2 doesn't hold in-flight
+    // parts open until the server's 6-hour sweeper runs.
+    try {
+      if (initiated.multipart != null) {
+        return await _sendMultipart(
+          transferId: initiated.transferId,
+          ciphertext: ciphertext,
+          plan: initiated.multipart!,
+          onProgress: onProgress,
+          cancel: cancel,
+        );
+      }
+      return await _sendSingleShot(
+        transferId: initiated.transferId,
+        ciphertext: ciphertext,
+        uploadUrl: initiated.uploadUrl!,
+        onProgress: onProgress,
+        cancel: cancel,
+      );
+    } on Object {
+      // Best-effort cleanup — a failure to abort still lets the
+      // orphan sweeper reclaim in the background. Don't swallow the
+      // outer exception, whatever it is, on abort failure.
+      try {
+        await _transfers.abort(initiated.transferId);
+      } on Object {
+        // ignore
+      }
+      rethrow;
+    }
+  }
+
+  Future<SendResult> _sendSingleShot({
+    required String transferId,
+    required Uint8List ciphertext,
+    required String uploadUrl,
+    required void Function(int, int)? onProgress,
+    required CancelToken? cancel,
+  }) async {
+    cancel?.throwIfCancelled();
     final putRes = await _httpClient.put(
-      Uri.parse(initiated.uploadUrl),
+      Uri.parse(uploadUrl),
       body: ciphertext,
     );
     if (putRes.statusCode < 200 || putRes.statusCode >= 300) {
@@ -147,11 +184,65 @@ class TransferService {
         message: 'Upload to storage failed (HTTP ${putRes.statusCode}).',
       );
     }
+    onProgress?.call(ciphertext.length, ciphertext.length);
 
-    // 8. Commit — server HEADs, measures, charges quota.
-    final committed = await _transfers.commit(initiated.transferId);
+    cancel?.throwIfCancelled();
+    final committed = await _transfers.commit(transferId);
     return SendResult(
-      transferId: initiated.transferId,
+      transferId: transferId,
+      byteCountOnServer: committed.byteCount,
+      status: committed.status,
+    );
+  }
+
+  Future<SendResult> _sendMultipart({
+    required String transferId,
+    required Uint8List ciphertext,
+    required MultipartUploadPlan plan,
+    required void Function(int, int)? onProgress,
+    required CancelToken? cancel,
+  }) async {
+    final parts = <CommitPart>[];
+    var uploadedBytes = 0;
+    for (final partUrl in plan.parts) {
+      cancel?.throwIfCancelled();
+      // Slice the ciphertext for this part. Non-final parts are
+      // exactly `plan.partSize` bytes per S3 contract; the last part
+      // may be shorter (`plan.parts.length * plan.partSize` may exceed
+      // ciphertext.length).
+      final offset = (partUrl.partNumber - 1) * plan.partSize;
+      if (offset >= ciphertext.length) {
+        // We got more part URLs than actually needed — happens when
+        // the ciphertext ended up smaller than the client's original
+        // byte_count declaration. Safe to skip.
+        continue;
+      }
+      final end = (offset + plan.partSize).clamp(0, ciphertext.length);
+      final body = Uint8List.sublistView(ciphertext, offset, end);
+      final res = await _httpClient.put(Uri.parse(partUrl.url), body: body);
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        throw ApiException(
+          statusCode: res.statusCode,
+          message: 'Upload of part ${partUrl.partNumber} failed '
+              '(HTTP ${res.statusCode}).',
+        );
+      }
+      final etag = res.headers['etag'];
+      if (etag == null || etag.isEmpty) {
+        throw StateError(
+          'Object storage did not return an ETag for part '
+          '${partUrl.partNumber}; cannot commit multipart upload.',
+        );
+      }
+      parts.add(CommitPart(partNumber: partUrl.partNumber, etag: etag));
+      uploadedBytes += body.length;
+      onProgress?.call(uploadedBytes, ciphertext.length);
+    }
+
+    cancel?.throwIfCancelled();
+    final committed = await _transfers.commit(transferId, parts: parts);
+    return SendResult(
+      transferId: transferId,
       byteCountOnServer: committed.byteCount,
       status: committed.status,
     );
@@ -252,8 +343,10 @@ class TransferService {
       fileKey: fileKey,
     );
 
-    // 6. Decrypt body.
-    final plaintext = _fileCrypto.decryptFile(
+    // 6. Decrypt body via the M4 chunked-secretstream reader. Throws
+    // FormatException if the OS4S magic prefix is missing (older
+    // sender client) and SodiumException on any AEAD failure.
+    final plaintext = await _fileCrypto.decryptFile(
       ciphertextBlob: ciphertext,
       key: fileKey,
     );
@@ -296,7 +389,34 @@ class TransferService {
     }
     return cleaned;
   }
+}
 
+// --- cancellation --------------------------------------------------------
+
+/// Cheap cancel signal owned by the UI. `cancel()` flips the flag;
+/// the send loop checks between part PUTs and throws
+/// [SendCancelledException]. The service catches it in the /abort
+/// finally and rethrows.
+class CancelToken {
+  bool _cancelled = false;
+
+  bool get isCancelled => _cancelled;
+
+  void cancel() {
+    _cancelled = true;
+  }
+
+  void throwIfCancelled() {
+    if (_cancelled) {
+      throw SendCancelledException();
+    }
+  }
+}
+
+class SendCancelledException implements Exception {
+  const SendCancelledException();
+  @override
+  String toString() => 'Send cancelled by user.';
 }
 
 // --- domain result types -------------------------------------------------
