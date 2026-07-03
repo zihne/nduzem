@@ -1,27 +1,26 @@
 import 'dart:io' show Platform;
-import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
 import '../../api/api_client.dart';
 import '../../api/billing_api.dart';
 import '../auth/auth_providers.dart';
+import 'iap_purchase_service.dart';
 
 /// M3.1/M3.2/M3.3 client-side surface — one screen that:
 ///
 ///   1. Shows the current balance (from `GET /v1/billing/balance`).
 ///   2. Lists the region+platform-scoped catalog
 ///      (`GET /v1/billing/catalog`).
-///   3. Simulates a store purchase via the stub receipt path
-///      (`POST /v1/billing/iap/verify` with `receipt=STUB:<sku>:<txn>`)
-///      until real StoreKit / Play Billing plugins ship in a follow-up
-///      branch. See ADR-0033 for why stubs are the shipping default
-///      right now.
+///   3. Starts a purchase via [IapPurchaseService], which picks the
+///      real Play Billing flow (Android with Play Store) or the
+///      `STUB:<sku>:<txn>` fallback path (iOS / no-Play / desktop).
 ///
-/// The "store" is inferred from `Platform.isIOS ? apple : google` so
-/// the catalog we ask for matches what a real StoreKit/Play SDK would
-/// see. Region is hard-coded to `US` here — a settings-driven override
+/// The state machine for a purchase lives in the service, not the
+/// screen — so backing out of the paywall mid-purchase doesn't leak
+/// the acknowledgement. See ADR-0002.
+///
+/// Region is hard-coded to `US` for v1 — a settings-driven override
 /// lands with the M9.x settings surface.
 class PaywallScreen extends ConsumerStatefulWidget {
   const PaywallScreen({super.key});
@@ -35,12 +34,19 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
   // without re-fetching the catalog.
   BalanceSnapshot? _balance;
   CatalogResponse? _catalog;
+  // SKUs Play recognises on this device. Empty when we're on the STUB
+  // fallback path (iOS / no-Play). Populated on Android from
+  // `IapPurchaseService.queryProducts` after we know the catalog.
+  Set<String> _playAvailableSkus = const {};
+  bool _usingStubFlow = true;
   bool _loading = true;
   String? _error;
   String? _purchasingSku;
 
   static const String _defaultRegion = 'US';
 
+  // Catalog fetch uses whichever storefront actually applies on this
+  // device. iOS falls into "apple" (server accepts STUB regardless).
   String get _platform => Platform.isIOS ? 'apple' : 'google';
 
   @override
@@ -56,15 +62,27 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
     });
     try {
       final api = await ref.read(billingApiProvider.future);
+      final service = await ref.read(iapPurchaseServiceProvider.future);
       final balance = await api.fetchBalance();
       final catalog = await api.fetchCatalog(
         region: _defaultRegion,
         platform: _platform,
       );
+
+      final playAvailable = await service.playAvailable;
+      Set<String> playSkus = const {};
+      if (playAvailable) {
+        final catalogSkus = catalog.products.map((p) => p.sku).toSet();
+        final products = await service.queryProducts(catalogSkus);
+        playSkus = products.keys.toSet();
+      }
+
       if (!mounted) return;
       setState(() {
         _balance = balance;
         _catalog = catalog;
+        _playAvailableSkus = playSkus;
+        _usingStubFlow = !playAvailable;
       });
     } on ApiException catch (exc) {
       if (mounted) setState(() => _error = exc.message);
@@ -81,28 +99,20 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
       _error = null;
     });
     try {
-      final api = await ref.read(billingApiProvider.future);
-      // Stub receipt. When real StoreKit / Play Billing plugins wire up
-      // in a follow-up branch, the receipt string is replaced with the
-      // opaque payload the platform returned — the endpoint is
-      // unchanged, so this call stays.
-      final txn = _mintStubTxn();
-      final receipt = 'STUB:${product.sku}:$txn';
-      final res = await api.iapVerify(
-        platform: _platform,
-        productSku: product.sku,
-        region: _defaultRegion,
-        receipt: receipt,
+      final service = await ref.read(iapPurchaseServiceProvider.future);
+      final outcome = await service.buy(
+        sku: product.sku,
+        productType: product.productType,
       );
       if (!mounted) return;
-      setState(() => _balance = res.balance);
+      setState(() => _balance = outcome.result.balance);
       final scaffold = ScaffoldMessenger.of(context);
       scaffold.showSnackBar(
         SnackBar(
           content: Text(
-            res.idempotentReplay
+            outcome.result.idempotentReplay
                 ? 'Already granted (replay). Balance unchanged.'
-                : 'Granted ${_mbLabel(res.mbGranted)}.',
+                : _grantMessage(outcome),
           ),
         ),
       );
@@ -115,14 +125,12 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
     }
   }
 
-  String _mintStubTxn() {
-    // Bit of entropy so a rapid double-tap yields distinct rows on the
-    // server — matches what a real store SDK would surface. If the user
-    // wants to test the idempotency path directly, they can retry the
-    // same purchase via the "Already-granted?" tap logic in the future.
-    final rng = Random.secure();
-    final bits = List<int>.generate(4, (_) => rng.nextInt(1 << 30));
-    return 'stub-${bits.join('-')}';
+  String _grantMessage(IapPurchaseOutcome outcome) {
+    final mb = _mbLabel(outcome.result.mbGranted);
+    if (outcome.wasStub) {
+      return 'Granted $mb (stub — no real payment).';
+    }
+    return 'Granted $mb.';
   }
 
   @override
@@ -150,11 +158,12 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
             const SizedBox(height: 24),
             _CatalogSection(
               catalog: _catalog,
+              playAvailableSkus: _playAvailableSkus,
               onBuy: _buy,
               purchasingSku: _purchasingSku,
             ),
             const SizedBox(height: 24),
-            const _StubNoticeCard(),
+            _ModeNoticeCard(usingStubFlow: _usingStubFlow),
           ],
         ),
       ),
@@ -210,10 +219,16 @@ class _BalanceCard extends StatelessWidget {
 class _CatalogSection extends StatelessWidget {
   const _CatalogSection({
     required this.catalog,
+    required this.playAvailableSkus,
     required this.onBuy,
     required this.purchasingSku,
   });
   final CatalogResponse? catalog;
+
+  /// SKUs Play knows about. Empty when we're on the stub fallback
+  /// (iOS / no-Play) — tiles render as normal, since the STUB path
+  /// works for all of them.
+  final Set<String> playAvailableSkus;
   final void Function(CatalogProduct) onBuy;
   final String? purchasingSku;
 
@@ -238,6 +253,22 @@ class _CatalogSection extends StatelessWidget {
     final subs = c.products
         .where((p) => p.productType == 'subscription')
         .toList(growable: false);
+
+    Widget tile(CatalogProduct p) {
+      // On Android with Play, a SKU missing from `playAvailableSkus`
+      // means catalog / Play Console drift — grey out the Buy button
+      // so the user gets a clear "not available on this device"
+      // signal. On iOS / no-Play we take the STUB path uniformly.
+      final onPlayFlow = playAvailableSkus.isNotEmpty;
+      final unavailable = onPlayFlow && !playAvailableSkus.contains(p.sku);
+      return _ProductTile(
+        product: p,
+        busy: purchasingSku == p.sku,
+        unavailable: unavailable,
+        onBuy: unavailable ? null : () => onBuy(p),
+      );
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -247,12 +278,7 @@ class _CatalogSection extends StatelessWidget {
             style: Theme.of(context).textTheme.titleMedium,
           ),
           const SizedBox(height: 8),
-          for (final p in packs)
-            _ProductTile(
-              product: p,
-              busy: purchasingSku == p.sku,
-              onBuy: () => onBuy(p),
-            ),
+          for (final p in packs) tile(p),
         ],
         if (subs.isNotEmpty) ...[
           const SizedBox(height: 16),
@@ -261,12 +287,7 @@ class _CatalogSection extends StatelessWidget {
             style: Theme.of(context).textTheme.titleMedium,
           ),
           const SizedBox(height: 8),
-          for (final p in subs)
-            _ProductTile(
-              product: p,
-              busy: purchasingSku == p.sku,
-              onBuy: () => onBuy(p),
-            ),
+          for (final p in subs) tile(p),
         ],
       ],
     );
@@ -277,11 +298,16 @@ class _ProductTile extends StatelessWidget {
   const _ProductTile({
     required this.product,
     required this.busy,
+    required this.unavailable,
     required this.onBuy,
   });
   final CatalogProduct product;
   final bool busy;
-  final VoidCallback onBuy;
+  final bool unavailable;
+
+  /// null when the tile is disabled (currently `unavailable == true`
+  /// is the only case).
+  final VoidCallback? onBuy;
 
   @override
   Widget build(BuildContext context) {
@@ -303,6 +329,16 @@ class _ProductTile extends StatelessWidget {
                     '${_mbLabel(product.mbGranted)} · ${product.sku}',
                     style: const TextStyle(fontStyle: FontStyle.italic),
                   ),
+                  if (unavailable) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      'Not available on this device',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -313,7 +349,7 @@ class _ProductTile extends StatelessWidget {
             ),
             const SizedBox(width: 12),
             FilledButton(
-              onPressed: busy ? null : onBuy,
+              onPressed: (busy || onBuy == null) ? null : onBuy,
               child: busy
                   ? const SizedBox(
                       height: 16,
@@ -329,24 +365,25 @@ class _ProductTile extends StatelessWidget {
   }
 }
 
-class _StubNoticeCard extends StatelessWidget {
-  const _StubNoticeCard();
+class _ModeNoticeCard extends StatelessWidget {
+  const _ModeNoticeCard({required this.usingStubFlow});
+  final bool usingStubFlow;
 
   @override
   Widget build(BuildContext context) {
-    // No user-facing wording change when this becomes a real store: the
-    // Buy button goes through StoreKit / Play Billing behind the scenes
-    // and the /iap/verify call is identical. This notice disappears
-    // when we stop shipping stub verifiers on the server (ADR-0033
-    // "Open follow-ups").
+    final text = usingStubFlow
+        ? 'Development mode: purchases go through a stub receipt path '
+            "on the server (won't charge you). Real StoreKit lands with "
+            'Apple live verification.'
+        : 'Real Play Billing purchases are active on this device. '
+            'Test-tier tokens are used with sandbox / license-tester '
+            "accounts and won't charge real money.";
     return Card(
       color: Theme.of(context).colorScheme.surfaceContainerHighest,
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Text(
-          'Development build: purchases go through a stub receipt path '
-          'on the server (ADR-0033). Real StoreKit / Play Billing wires '
-          'up in a future release.',
+          text,
           style: Theme.of(context).textTheme.bodySmall,
         ),
       ),

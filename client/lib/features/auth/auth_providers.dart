@@ -12,6 +12,7 @@ import '../../crypto/file_crypto.dart';
 import '../../crypto/keys.dart';
 import '../../crypto/sealed_box.dart';
 import '../../storage/secure_storage.dart';
+import '../billing/iap_purchase_service.dart';
 import '../transfers/transfer_service.dart';
 import '../verify_contact/verified_contacts_repo.dart';
 import 'auth_repository.dart';
@@ -96,6 +97,20 @@ final usersApiProvider = FutureProvider<UsersApi>((ref) async {
 final billingApiProvider = FutureProvider<BillingApi>((ref) async {
   final wiring = await ref.watch(_authWiringProvider.future);
   return wiring.billingApi;
+});
+
+/// M3.3 Play Billing state machine. Kept alive across paywall
+/// mount/dismount so an in-flight purchase doesn't lose its
+/// acknowledgement if the user backs out of the screen (see ADR-0002).
+/// Region is hard-coded to `US` for v1; the M9.x settings surface will
+/// wire in an operator override.
+final iapPurchaseServiceProvider =
+    FutureProvider<IapPurchaseService>((ref) async {
+  final billingApi = await ref.watch(billingApiProvider.future);
+  final service = IapPurchaseService(billingApi: billingApi, region: 'US');
+  await service.initialize();
+  ref.onDispose(service.dispose);
+  return service;
 });
 
 final verifiedContactsRepoProvider = Provider<VerifiedContactsRepo>((ref) {

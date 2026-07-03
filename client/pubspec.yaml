@@ -59,6 +59,13 @@ dependencies:
   # (download → decrypt → write).
   path_provider: ^2.1.5
 
+  # M3.3: Play Billing on Android (StoreKit on iOS, stubbed server-side
+  # for now). Bundles the Play Billing Library into the AAB — no manifest
+  # edits needed for v3.x. On platforms without a real store (iOS today,
+  # desktop/web) we fall back to the STUB:<sku>:<txn> receipt path per
+  # ADR-0002.
+  in_app_purchase: ^3.2.0
+
 dev_dependencies:
   flutter_test: { sdk: flutter }
   flutter_lints: ^5.0.0
