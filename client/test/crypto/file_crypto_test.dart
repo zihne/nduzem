@@ -1,5 +1,7 @@
+import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart' as dart_crypto;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sodium_libs/sodium_libs.dart';
 
@@ -116,4 +118,137 @@ void main() {
       throwsA(isA<Exception>()),
     );
   });
+
+  // --- streaming send from disk (ADR-0004) --------------------------------
+
+  test(
+    'encryptFileToTempFile: multi-chunk file roundtrips via in-memory decrypt',
+    () async {
+      if (skipReason != null) return;
+      final tempDir = await Directory.systemTemp.createTemp('opq-test-');
+      try {
+        final key = fc!.generateFileKey();
+        // ~3 chunks + tail so we exercise the multi-chunk path.
+        final plain = Uint8List.fromList(
+          List<int>.generate(
+            FileCrypto.plaintextChunkBytes * 3 + 7777,
+            (i) => (i * 17 + 3) & 0xff,
+          ),
+        );
+        final source = File('${tempDir.path}/source.bin');
+        await source.writeAsBytes(plain);
+
+        int lastDone = -1;
+        int lastTotal = -1;
+        final result = await fc!.encryptFileToTempFile(
+          plaintextPath: source.path,
+          key: key,
+          tempDir: tempDir,
+          onProgress: (done, total) {
+            lastDone = done;
+            lastTotal = total;
+          },
+        );
+
+        // Progress fired and ended at 100 %.
+        expect(lastTotal, plain.length);
+        expect(lastDone, plain.length);
+
+        // Blob SHA-256 matches sha256(ciphertext file).
+        final ct = await File(result.ciphertextPath).readAsBytes();
+        expect(ct.length, result.ciphertextLength);
+        expect(
+          dart_crypto.sha256.convert(ct).toString(),
+          result.blobSha256Hex,
+        );
+
+        // The ciphertext is a valid OS4S container — the in-memory
+        // decrypt reads it back byte-for-byte to the original plaintext.
+        final decrypted =
+            await fc!.decryptFile(ciphertextBlob: ct, key: key);
+        expect(decrypted, plain);
+      } finally {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      }
+    },
+  );
+
+  test(
+    'encryptFileToTempFile: cancel mid-encrypt deletes the partial temp file',
+    () async {
+      if (skipReason != null) return;
+      final tempDir = await Directory.systemTemp.createTemp('opq-test-');
+      try {
+        final key = fc!.generateFileKey();
+        final plain = Uint8List.fromList(
+          List<int>.generate(
+            FileCrypto.plaintextChunkBytes * 5,
+            (i) => i & 0xff,
+          ),
+        );
+        final source = File('${tempDir.path}/source.bin');
+        await source.writeAsBytes(plain);
+
+        var callCount = 0;
+        void throwOnThirdCall() {
+          callCount++;
+          if (callCount >= 3) {
+            throw const _TestCancelled();
+          }
+        }
+
+        await expectLater(
+          fc!.encryptFileToTempFile(
+            plaintextPath: source.path,
+            key: key,
+            tempDir: tempDir,
+            throwIfCancelled: throwOnThirdCall,
+          ),
+          throwsA(isA<_TestCancelled>()),
+        );
+
+        // Cleanup contract: no `.enc.tmp` files left behind after
+        // a mid-encrypt failure.
+        final leftovers = tempDir
+            .listSync()
+            .where((e) => e.path.endsWith('.enc.tmp'))
+            .toList();
+        expect(leftovers, isEmpty);
+      } finally {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      }
+    },
+  );
+
+  test('encryptFileToTempFile: empty plaintext file still roundtrips',
+      () async {
+    if (skipReason != null) return;
+    final tempDir = await Directory.systemTemp.createTemp('opq-test-');
+    try {
+      final key = fc!.generateFileKey();
+      final source = File('${tempDir.path}/source.bin');
+      await source.writeAsBytes(<int>[]);
+
+      final result = await fc!.encryptFileToTempFile(
+        plaintextPath: source.path,
+        key: key,
+        tempDir: tempDir,
+      );
+      final ct = await File(result.ciphertextPath).readAsBytes();
+      final decrypted = await fc!.decryptFile(ciphertextBlob: ct, key: key);
+      expect(decrypted.length, 0);
+    } finally {
+      if (await tempDir.exists()) {
+        await tempDir.delete(recursive: true);
+      }
+    }
+  });
+}
+
+class _TestCancelled implements Exception {
+  const _TestCancelled();
 }
