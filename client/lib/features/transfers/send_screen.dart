@@ -42,9 +42,16 @@ class _SendScreenState extends ConsumerState<SendScreen> {
   String? _error;
   String? _info;
 
+  // True while the file_picker SAF flow is running — including the
+  // plugin's post-selection copy of the SAF-picked file into app
+  // cache, which can take real time on large files. Distinct from
+  // `_busy` (which is the send flow) so the button label + spinner
+  // can reflect "picking / reading" separately from "sending".
+  bool _picking = false;
+
   // M4 send progress. Non-null while a send is in flight. Cleared on
   // completion, error, or cancel. `_phase` distinguishes the
-  // encrypt phase from the upload phase so the UI can label + reset
+  // encrypt / preparing / upload phases so the UI can label + reset
   // the bar between them (ADR-0004).
   SendPhase? _phase;
   int? _uploadedBytes;
@@ -59,33 +66,51 @@ class _SendScreenState extends ConsumerState<SendScreen> {
 
   Future<void> _pickFile() async {
     // `withData: false` so the plugin doesn't eagerly load bytes at
-    // pick time. Streaming send (ADR-0004) reads the file on demand
-    // — the screen only needs the path, name, mime, and length.
-    final res = await FilePicker.platform.pickFiles(withData: false);
-    if (res == null || res.files.isEmpty) return;
-    final f = res.files.single;
-    if (f.path == null) {
-      setState(
-        () => _error = 'Could not read that file — no path was returned.',
-      );
-      return;
-    }
-    final int size;
-    try {
-      size = await File(f.path!).length();
-    } on Object catch (exc) {
-      setState(() => _error = 'Could not stat that file: $exc');
-      return;
-    }
+    // pick time. Streaming send (ADR-0004) reads the file on demand.
+    // On Android with SAF, `pickFiles` still copies the selected
+    // file into app cache before returning — for a multi-GB file
+    // that copy can take tens of seconds with no visible activity.
+    // `_picking` becomes visible when SAF dismisses, so the user
+    // sees "Reading file…" during that gap.
     setState(() {
-      _file = _PickedFile(
-        name: f.name,
-        mime: lookupMimeType(f.name),
-        path: f.path!,
-        length: size,
-      );
+      _picking = true;
       _error = null;
     });
+    try {
+      final res = await FilePicker.platform.pickFiles(withData: false);
+      if (res == null || res.files.isEmpty) return;
+      final f = res.files.single;
+      if (f.path == null) {
+        if (mounted) {
+          setState(
+            () =>
+                _error = 'Could not read that file — no path was returned.',
+          );
+        }
+        return;
+      }
+      final int size;
+      try {
+        size = await File(f.path!).length();
+      } on Object catch (exc) {
+        if (mounted) {
+          setState(() => _error = 'Could not stat that file: $exc');
+        }
+        return;
+      }
+      if (!mounted) return;
+      setState(() {
+        _file = _PickedFile(
+          name: f.name,
+          mime: lookupMimeType(f.name),
+          path: f.path!,
+          length: size,
+        );
+        _error = null;
+      });
+    } finally {
+      if (mounted) setState(() => _picking = false);
+    }
   }
 
   Future<void> _lookupRecipient() async {
@@ -218,9 +243,19 @@ class _SendScreenState extends ConsumerState<SendScreen> {
             ),
             const SizedBox(height: 8),
             OutlinedButton.icon(
-              onPressed: _busy ? null : _pickFile,
-              icon: const Icon(Icons.attach_file),
-              label: Text(_file == null ? 'Pick a file' : _file!.name),
+              onPressed: (_busy || _picking) ? null : _pickFile,
+              icon: _picking
+                  ? const SizedBox(
+                      height: 16,
+                      width: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.attach_file),
+              label: Text(
+                _picking
+                    ? 'Reading file…'
+                    : (_file == null ? 'Pick a file' : _file!.name),
+              ),
             ),
             if (_file != null) ...[
               const SizedBox(height: 4),
@@ -340,10 +375,12 @@ class _PickedFile {
   final int length;
 }
 
-/// Two-phase progress bar (ADR-0004). `phase` labels which stage of
-/// the send we're in — encrypting (streaming plaintext through
-/// secretstream into a temp file) vs uploading (PUTting parts). The
-/// bar reset between phases makes the transition visually obvious.
+/// Multi-phase progress bar (ADR-0004). `phase` labels which stage
+/// of the send we're in — encrypting (streaming plaintext through
+/// secretstream into a temp file), preparing (enc_header + seal +
+/// sign + /initiate — indeterminate), or uploading (PUTting parts).
+/// The bar reset between phases makes the transition visually
+/// obvious.
 class _SendProgress extends StatelessWidget {
   const _SendProgress({
     required this.phase,
@@ -364,11 +401,17 @@ class _SendProgress extends StatelessWidget {
     }
     final phaseLabel = switch (phase) {
       SendPhase.encrypting => 'Encrypting',
+      SendPhase.preparing => 'Preparing upload',
       SendPhase.uploading => 'Uploading',
       null => 'Preparing…',
     };
     String label;
-    if (value != null && d != null && t != null) {
+    if (phase == SendPhase.preparing) {
+      // Indeterminate on purpose — /initiate + seal + sign together
+      // are unbounded from the UI's perspective.
+      value = null;
+      label = '$phaseLabel…';
+    } else if (value != null && d != null && t != null) {
       label = '$phaseLabel · ${_mib(d)} / ${_mib(t)}'
           ' (${(value * 100).toStringAsFixed(0)}%)';
     } else {
