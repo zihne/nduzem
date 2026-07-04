@@ -111,6 +111,12 @@ class HomeScreen extends ConsumerWidget {
                 ),
                 const SizedBox(height: 12),
                 OutlinedButton.icon(
+                  onPressed: () => context.push('/history'),
+                  icon: const Icon(Icons.history),
+                  label: const Text('Transfer history'),
+                ),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
                   onPressed: () => context.push('/paywall'),
                   icon: const Icon(Icons.wallet),
                   label: const Text('Storage & credits'),

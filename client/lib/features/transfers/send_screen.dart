@@ -12,6 +12,8 @@ import '../../api/api_client.dart';
 import '../../api/users_api.dart';
 import '../../crypto/fingerprint.dart';
 import '../auth/auth_providers.dart';
+import '../history/transfer_history_entry.dart';
+import '../history/transfer_history_provider.dart';
 import '../verify_contact/verified_contacts_repo.dart';
 import 'transfer_service.dart';
 
@@ -238,6 +240,26 @@ class _SendScreenState extends ConsumerState<SendScreen> {
         },
         cancel: cancel,
       );
+      if (!mounted) return;
+      // Log to local history BEFORE the completion dialog so a user
+      // who force-quits the app after seeing the dialog still has the
+      // entry on next launch (ADR-0007).
+      await ref.read(transferHistoryProvider.notifier).log(
+            SentHistoryEntry(
+              transferId: result.transferId,
+              timestamp: DateTime.now().toUtc(),
+              filename: file.name,
+              sizeBytes: file.length,
+              mode: result.mode == SendMode.link ? 'link' : 'app',
+              recipientLabel: result.mode == SendMode.link
+                  ? null
+                  : (recipientLabel.isEmpty ? null : recipientLabel),
+              maxDownloads:
+                  result.mode == SendMode.link ? _maxDownloads : 1,
+              hasPassword: result.mode == SendMode.link &&
+                  linkPassword.isNotEmpty,
+            ),
+          );
       if (!mounted) return;
       // Forced-acknowledgement dialog. `barrierDismissible: false` so
       // a distracted user cannot swipe past it — the only way out is

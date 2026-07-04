@@ -7,6 +7,8 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../api/api_client.dart';
 import '../auth/auth_providers.dart';
+import '../history/transfer_history_entry.dart';
+import '../history/transfer_history_provider.dart';
 import 'transfer_service.dart';
 
 /// Four-stage flow (spec §5.3), post-M4 streaming (ADR-0006):
@@ -269,6 +271,27 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
       final path = _decrypted?.plaintextPath;
       if (path != null) {
         await _deleteIfExists(path);
+      }
+      // Log to local history (ADR-0007). Ack is the point at which
+      // the receive is unambiguously "done" — the server-side burn is
+      // in flight and the user has already saved locally.
+      final decrypted = _decrypted;
+      if (decrypted != null) {
+        final senderId = decrypted.senderId;
+        await ref.read(transferHistoryProvider.notifier).log(
+              ReceivedHistoryEntry(
+                transferId: decrypted.transferId,
+                timestamp: DateTime.now().toUtc(),
+                filename: decrypted.filename,
+                sizeBytes: decrypted.plaintextLength,
+                senderIdShort: senderId != null && senderId.length >= 8
+                    ? senderId.substring(0, 8)
+                    : senderId,
+                senderHandle: decrypted.senderHandle,
+                signatureVerified: decrypted.senderSignatureVerified,
+                savedPath: _savedPath,
+              ),
+            );
       }
       if (!mounted) return;
       setState(() => _acked = true);

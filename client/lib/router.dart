@@ -11,6 +11,7 @@ import 'features/auth/totp_challenge_screen.dart';
 import 'features/auth/totp_enroll_screen.dart';
 import 'features/auth/verify_email_screen.dart';
 import 'features/billing/paywall_screen.dart';
+import 'features/history/transfer_history_screen.dart';
 import 'features/home/home_screen.dart';
 import 'features/transfers/inbox_screen.dart';
 import 'features/transfers/receive_screen.dart';
@@ -89,6 +90,11 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/inbox', builder: (_, __) => const InboxScreen()),
       // M3 billing surface — balance + catalog + IAP verify (stubbed).
       GoRoute(path: '/paywall', builder: (_, __) => const PaywallScreen()),
+      // Local transfer history (ADR-0007).
+      GoRoute(
+        path: '/history',
+        builder: (_, __) => const TransferHistoryScreen(),
+      ),
       GoRoute(
         path: '/receive/:transferId',
         builder: (context, state) => ReceiveScreen(
