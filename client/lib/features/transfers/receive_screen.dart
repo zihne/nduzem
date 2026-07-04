@@ -46,12 +46,36 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
   bool _busy = false;
   String? _error;
 
+  /// Where the large-file save fallback will drop the plaintext.
+  /// Resolved once at screen mount so the warning banner can show the
+  /// exact destination path BEFORE the user commits to the save.
+  String? _externalBaseDir;
+
   // Streaming progress (ADR-0006). Non-null while `receive()` is in
   // flight; cleared on completion or error.
   ReceivePhase? _phase;
   int? _phaseDone;
   int? _phaseTotal;
   CancelToken? _cancel;
+
+  @override
+  void initState() {
+    super.initState();
+    _resolveExternalBaseDir();
+  }
+
+  Future<void> _resolveExternalBaseDir() async {
+    try {
+      final base = Platform.isAndroid
+          ? await getExternalStorageDirectory()
+          : await getApplicationDocumentsDirectory();
+      if (!mounted) return;
+      setState(() => _externalBaseDir = base?.path);
+    } on Object {
+      // Best-effort — the warning banner falls back to a generic
+      // "OpaqueShare folder" wording if we couldn't resolve.
+    }
+  }
 
   @override
   void dispose() {
@@ -121,6 +145,7 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
       _busy = true;
       _error = null;
     });
+    String? savedPath;
     try {
       // Big files skip SAF entirely and stream-copy the plaintext
       // temp into an app-external directory. `readAsBytes` +
@@ -128,38 +153,42 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
       // (documented in ADR-0006); the copy path uses `File.copy`
       // which streams internally, ~zero heap pressure.
       if (decrypted.plaintextLength > _saveBytesWarnThreshold) {
-        final saved = await _saveToExternalStorage(decrypted);
-        if (saved != null) setState(() => _savedPath = saved);
-        return;
-      }
-      // Small-file fast path: `file_picker.saveFile(bytes:)` uses SAF
-      // on Android and iOS document picker on iOS. Peak memory =
-      // plaintext size (once); fine for < 200 MiB.
-      final bytes = await File(decrypted.plaintextPath).readAsBytes();
-      final result = await FilePicker.platform.saveFile(
-        dialogTitle: 'Save decrypted file',
-        fileName: decrypted.filename,
-        bytes: bytes,
-      );
-      if (result == null) {
-        // User cancelled the dialog — leave the plaintext on disk
-        // so they can retry.
-        return;
-      }
-      final saved = File(result);
-      if (!saved.existsSync()) {
+        savedPath = await _saveToExternalStorage(decrypted);
+      } else {
+        // Small-file fast path: `file_picker.saveFile(bytes:)` uses
+        // SAF on Android and iOS document picker on iOS. Peak
+        // memory = plaintext size (once); fine for < 200 MiB.
+        final bytes = await File(decrypted.plaintextPath).readAsBytes();
+        final result = await FilePicker.platform.saveFile(
+          dialogTitle: 'Save decrypted file',
+          fileName: decrypted.filename,
+          bytes: bytes,
+        );
+        if (result == null) {
+          // User cancelled the dialog — leave the plaintext on disk
+          // so they can retry.
+          return;
+        }
+        final saved = File(result);
         // Some Android variants return a content:// URI that isn't a
         // filesystem path — the write still happened via SAF. Just
         // surface the URI as-is.
-        setState(() => _savedPath = result);
-      } else {
-        setState(() => _savedPath = saved.path);
+        savedPath = saved.existsSync() ? saved.path : result;
       }
     } on Object catch (exc) {
       setState(() => _error = 'Save failed: $exc');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+    if (savedPath == null) return;
+    setState(() => _savedPath = savedPath);
+    // Auto-ack after a successful save. Server's /ack burns
+    // immediately for `max_downloads=1` (the default) and defers
+    // for multi-download links (per the fix to /v1/links/{id}/ack).
+    // If the ack fails, we surface a manual retry button below —
+    // don't leave the user unsure whether the server is holding
+    // storage.
+    await _ack(autoTriggered: true);
   }
 
   /// Fallback save path for files too big to fit in `saveFile(bytes:)`.
@@ -227,7 +256,7 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
     return candidate;
   }
 
-  Future<void> _ack() async {
+  Future<void> _ack({bool autoTriggered = false}) async {
     setState(() {
       _busy = true;
       _error = null;
@@ -236,7 +265,7 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
       final svc = await ref.read(transferServiceProvider.future);
       await svc.ack(widget.transferId);
       // Success: drop the plaintext temp file. Nothing else will
-      // consume it — the user has already saved via SAF above.
+      // consume it — the user has already saved above.
       final path = _decrypted?.plaintextPath;
       if (path != null) {
         await _deleteIfExists(path);
@@ -244,7 +273,14 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
       if (!mounted) return;
       setState(() => _acked = true);
     } on ApiException catch (exc) {
-      setState(() => _error = exc.message);
+      // On auto-ack failure we still leave the user with a manual
+      // retry — the ack button re-appears below because `_acked`
+      // stays false. Server has a 7-day TTL sweeper as the backstop
+      // if the user never retries.
+      final prefix = autoTriggered
+          ? 'Auto-ack failed — tap the button below to retry: '
+          : '';
+      setState(() => _error = '$prefix${exc.message}');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -307,7 +343,9 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
                   _savedPath == null) ...[
                 const SizedBox(height: 12),
                 _LargeFileWarning(
-                  size: _decrypted!.plaintextLength,
+                  destinationPath: _externalBaseDir == null
+                      ? null
+                      : '$_externalBaseDir/OpaqueShare/${_decrypted!.filename}',
                 ),
               ],
               const SizedBox(height: 16),
@@ -506,12 +544,17 @@ class _ReceiveProgress extends StatelessWidget {
 /// (ADR-0006 hotfix). A true native SAF stream-write is the
 /// follow-up.
 class _LargeFileWarning extends StatelessWidget {
-  const _LargeFileWarning({required this.size});
-  final int size;
+  const _LargeFileWarning({required this.destinationPath});
+
+  /// Where the file will land after Save. Null when
+  /// `getExternalStorageDirectory()` couldn't be resolved (rare) —
+  /// the widget then falls back to a generic message.
+  final String? destinationPath;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final path = destinationPath;
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -541,13 +584,20 @@ class _LargeFileWarning extends StatelessWidget {
           const SizedBox(height: 6),
           Text(
             'The decrypted file is bigger than 200 MiB — the system '
-            "file picker isn't reliable at this size. It'll be copied "
-            "straight into the OpaqueShare folder under this app's "
-            'external storage instead, and the exact path will be '
-            'shown when the save finishes.',
+            "file picker isn't reliable at this size. Tapping Save "
+            'will copy it straight to:',
             style: TextStyle(
               color: scheme.onTertiaryContainer,
               fontSize: 12,
+            ),
+          ),
+          const SizedBox(height: 6),
+          SelectableText(
+            path ?? '(OpaqueShare folder under this app\'s external storage)',
+            style: TextStyle(
+              color: scheme.onTertiaryContainer,
+              fontSize: 11,
+              fontFamily: 'monospace',
             ),
           ),
         ],
