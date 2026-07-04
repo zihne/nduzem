@@ -75,6 +75,16 @@ class TransferService {
   /// part-by-part (multipart) or in one shot (< 5 MiB). Peak memory
   /// ≈ 8 MiB regardless of file size (ADR-0004).
   ///
+  /// **Modes** (ADR-0005):
+  ///   - [SendMode.app]: recipient has an account; K_file is sealed
+  ///     to their `identity_pub` and travels through the server as
+  ///     `wrapped_key`. Requires a non-null `recipient`.
+  ///   - [SendMode.link]: recipient has no account. K_file is NOT
+  ///     sealed and NOT sent to the server; it's returned to the
+  ///     caller in [SendResult.linkFileKey] for the caller to embed
+  ///     in the URL fragment (`<origin>/r/<id>#<K_file>`). Optional
+  ///     `linkPassword` gates the download on the server side.
+  ///
   /// `onProgress` fires with `(phase, done, total)`:
   ///   - `SendPhase.encrypting`: `done` = plaintext bytes read,
   ///     `total` = `plaintextLength`.
@@ -85,14 +95,22 @@ class TransferService {
   /// part PUTs. Cancels after `/initiate` POST `/abort` before
   /// propagating so R2's in-flight parts are cleaned up immediately.
   Future<SendResult> send({
-    required UserLookup recipient,
+    required SendMode mode,
+    UserLookup? recipient,
     required String plaintextPath,
     required int plaintextLength,
     required String filename,
     String? mime,
+    String? linkPassword,
+    String? recipientEmail,
+    int maxDownloads = 1,
     void Function(SendPhase phase, int done, int total)? onProgress,
     CancelToken? cancel,
   }) async {
+    assert(
+      mode != SendMode.app || recipient != null,
+      'SendMode.app requires a non-null recipient',
+    );
     // Partial wakelock across the whole send. Multi-GB uploads run
     // for minutes; if the user pockets the phone the screen goes off
     // and Android's Doze can otherwise starve our upload of CPU /
@@ -142,13 +160,22 @@ class TransferService {
         fileKey: fileKey,
       );
 
-      // 4. Seal K_file for the recipient (crypto_box_seal).
-      final sealed = _sealedBox.seal(
-        message: fileKey,
-        recipientIdentityPublic: recipient.identityPublic,
-      );
+      // 4. Seal K_file for the recipient (crypto_box_seal) — app
+      // mode only. In link mode K_file rides in the URL fragment;
+      // the server never sees it.
+      String? wrappedKeyB64;
+      if (mode == SendMode.app) {
+        final sealed = _sealedBox.seal(
+          message: fileKey,
+          recipientIdentityPublic: recipient!.identityPublic,
+        );
+        wrappedKeyB64 = base64Encode(sealed);
+      }
 
-      // 5. Sign blob_sha256 with our Ed25519 signing_priv.
+      // 5. Sign blob_sha256 with our Ed25519 signing_priv. Wire shape
+      // is identical across modes; the web decrypt page ignores the
+      // signature (ADR-0035) but a future authenticated-link feature
+      // could verify it.
       final signingPriv = await _storage.readBytes(SecureStore.kSigningPrivate);
       if (signingPriv == null) {
         throw StateError(
@@ -164,12 +191,16 @@ class TransferService {
       // 6. Initiate on the server. Response is either single-shot or
       // multipart shape — same envelope, different upload path.
       final initiated = await _transfers.initiate(
-        recipientId: recipient.userId,
+        mode: mode == SendMode.app ? 'app' : 'link',
+        recipientId: recipient?.userId,
+        wrappedKeyB64: wrappedKeyB64,
+        linkPassword: linkPassword,
+        recipientEmail: recipientEmail,
         byteCount: enc.ciphertextLength,
         blobSha256Hex: enc.blobSha256Hex,
-        wrappedKeyB64: base64Encode(sealed),
         encHeaderB64: base64Encode(encHeader),
         signatureB64: base64Encode(signature),
+        maxDownloads: maxDownloads,
       );
 
       // 7 + 8. Upload + commit. Anything from here that throws MUST
@@ -177,8 +208,9 @@ class TransferService {
       // in-flight parts open until the server's 6-hour sweeper runs.
       onProgress?.call(SendPhase.uploading, 0, enc.ciphertextLength);
       try {
+        final CommitTransferResponse committed;
         if (initiated.multipart != null) {
-          return await _sendMultipartFromFile(
+          committed = await _sendMultipartFromFile(
             transferId: initiated.transferId,
             ciphertextFile: ciphertextFile,
             ciphertextLength: enc.ciphertextLength,
@@ -187,15 +219,27 @@ class TransferService {
                 onProgress?.call(SendPhase.uploading, up, total),
             cancel: cancel,
           );
+        } else {
+          committed = await _sendSingleShotFromFile(
+            transferId: initiated.transferId,
+            ciphertextFile: ciphertextFile,
+            ciphertextLength: enc.ciphertextLength,
+            uploadUrl: initiated.uploadUrl!,
+            onProgress: (up, total) =>
+                onProgress?.call(SendPhase.uploading, up, total),
+            cancel: cancel,
+          );
         }
-        return await _sendSingleShotFromFile(
+        return SendResult(
+          mode: mode,
           transferId: initiated.transferId,
-          ciphertextFile: ciphertextFile,
-          ciphertextLength: enc.ciphertextLength,
-          uploadUrl: initiated.uploadUrl!,
-          onProgress: (up, total) =>
-              onProgress?.call(SendPhase.uploading, up, total),
-          cancel: cancel,
+          byteCountOnServer: committed.byteCount,
+          status: committed.status,
+          // K_file is handed back to the caller ONLY in link mode so
+          // the UI can embed it in the URL fragment. App mode never
+          // needs it after this point — the sealed copy sits on the
+          // server for the recipient to unseal.
+          linkFileKey: mode == SendMode.link ? fileKey : null,
         );
       } on Object {
         // Best-effort cleanup — a failure to abort still lets the
@@ -232,7 +276,7 @@ class TransferService {
     }
   }
 
-  Future<SendResult> _sendSingleShotFromFile({
+  Future<CommitTransferResponse> _sendSingleShotFromFile({
     required String transferId,
     required File ciphertextFile,
     required int ciphertextLength,
@@ -256,15 +300,10 @@ class TransferService {
     onProgress?.call(ciphertextLength, ciphertextLength);
 
     cancel?.throwIfCancelled();
-    final committed = await _transfers.commit(transferId);
-    return SendResult(
-      transferId: transferId,
-      byteCountOnServer: committed.byteCount,
-      status: committed.status,
-    );
+    return _transfers.commit(transferId);
   }
 
-  Future<SendResult> _sendMultipartFromFile({
+  Future<CommitTransferResponse> _sendMultipartFromFile({
     required String transferId,
     required File ciphertextFile,
     required int ciphertextLength,
@@ -308,12 +347,7 @@ class TransferService {
       }
 
       cancel?.throwIfCancelled();
-      final committed = await _transfers.commit(transferId, parts: parts);
-      return SendResult(
-        transferId: transferId,
-        byteCountOnServer: committed.byteCount,
-        status: committed.status,
-      );
+      return _transfers.commit(transferId, parts: parts);
     } finally {
       await raf.close();
     }
@@ -490,6 +524,20 @@ class SendCancelledException implements Exception {
   String toString() => 'Send cancelled by user.';
 }
 
+/// Which end-to-end path the send takes (ADR-0005).
+enum SendMode {
+  /// Recipient has an account. K_file is sealed to their
+  /// `identity_pub` (crypto_box_seal), delivered by the server as
+  /// `wrapped_key`. Requires a resolved [UserLookup].
+  app,
+
+  /// Recipient has no account. K_file is NOT sealed and NOT sent to
+  /// the server; it's returned via [SendResult.linkFileKey] so the
+  /// UI can embed it in the URL fragment (`<origin>/r/<id>#<K_file>`).
+  /// Optional password on the server side gates the download.
+  link,
+}
+
 /// Phases the send progresses through (ADR-0004). The service-to-UI
 /// progress callback fires with the current phase so the screen can
 /// label it and reset the bar between phase transitions.
@@ -517,13 +565,25 @@ enum SendPhase {
 
 class SendResult {
   const SendResult({
+    required this.mode,
     required this.transferId,
     required this.byteCountOnServer,
     required this.status,
+    this.linkFileKey,
   });
+
+  /// Which send path produced this result.
+  final SendMode mode;
   final String transferId;
   final int byteCountOnServer;
   final String status;
+
+  /// Raw K_file bytes, populated ONLY when `mode == SendMode.link`.
+  /// The caller base64url-encodes this into the URL fragment so the
+  /// recipient can decrypt via the web page (ADR-0005). Null in app
+  /// mode — K_file was sealed to the recipient's identity_pub and
+  /// isn't needed by the sender after upload.
+  final Uint8List? linkFileKey;
 }
 
 /// Result of a successful download + decrypt. The bytes live in memory
