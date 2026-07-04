@@ -145,6 +145,8 @@ class TransfersApi {
       cryptoSuite: (body['crypto_suite'] as num).toInt(),
       senderIdentityPubB64: body['sender_identity_pub'] as String?,
       senderSigningPubB64: body['sender_signing_pub'] as String?,
+      senderId: body['sender_id'] as String?,
+      senderHandle: body['sender_handle'] as String?,
     );
   }
 
@@ -284,6 +286,8 @@ class DownloadTransferResponse {
     required this.cryptoSuite,
     required this.senderIdentityPubB64,
     required this.senderSigningPubB64,
+    required this.senderId,
+    required this.senderHandle,
   });
   final String downloadUrl;
   final String? wrappedKeyB64; // null in link mode (M5)
@@ -302,5 +306,17 @@ class DownloadTransferResponse {
   /// [senderIdentityPubB64]. Verifies the Ed25519 `signatureB64` over
   /// `blobSha256Hex` without a second lookup round-trip (ADR-0031).
   final String? senderSigningPubB64;
+
+  /// Sender's account id (uuid, as string). Null in link mode and for
+  /// senders that have erased themselves. Used by the receive screen
+  /// to log a short-form sender id to on-device transfer history
+  /// (client ADR-0007) alongside [senderHandle].
+  final String? senderId;
+
+  /// Sender's decrypted handle. Null in link mode and for senders that
+  /// have erased themselves (or never set a handle). Logged to
+  /// on-device transfer history so past receives display as `@alice`
+  /// rather than a bare UUID prefix (client ADR-0007).
+  final String? senderHandle;
 }
 

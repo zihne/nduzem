@@ -508,6 +508,8 @@ class TransferService {
         plaintextLength: dec.plaintextLength,
         senderSignatureVerified: senderSignatureVerified,
         senderIdentityPubB64: dl.senderIdentityPubB64,
+        senderId: dl.senderId,
+        senderHandle: dl.senderHandle,
       );
       } finally {
         // Always drop the ciphertext temp file. Success, cancel, or
@@ -752,6 +754,8 @@ class DecryptedTransfer {
     required this.plaintextLength,
     required this.senderSignatureVerified,
     required this.senderIdentityPubB64,
+    required this.senderId,
+    required this.senderHandle,
   });
   final String transferId;
   final String filename;
@@ -775,4 +779,16 @@ class DecryptedTransfer {
   /// screen can offer "verify this sender now" with the fingerprint
   /// pre-computed. Null when the sender has erased themselves.
   final String? senderIdentityPubB64;
+
+  /// Sender's account id (UUID as string). Null in link mode and for
+  /// erased senders. The receive screen persists the first 8 chars to
+  /// on-device history (ADR-0007) as a compact fallback when
+  /// [senderHandle] isn't set.
+  final String? senderId;
+
+  /// Sender's decrypted handle (per ADR-0031) if the server surfaced
+  /// one. Null in link mode, for erased senders, and for senders that
+  /// never set a handle. Persisted to on-device history so past
+  /// receives show as `@alice` rather than a UUID prefix.
+  final String? senderHandle;
 }
