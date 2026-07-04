@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../../api/api_client.dart';
 import '../auth/auth_providers.dart';
@@ -121,9 +122,19 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
       _error = null;
     });
     try {
-      // Read plaintext from the temp file only at save time.
-      // `file_picker` 8.x still requires `bytes:` on Android — the
-      // path-based streaming save is a follow-up (ADR-0006).
+      // Big files skip SAF entirely and stream-copy the plaintext
+      // temp into an app-external directory. `readAsBytes` +
+      // `saveFile(bytes:)` OOMs above ~200 MiB on mid-range Android
+      // (documented in ADR-0006); the copy path uses `File.copy`
+      // which streams internally, ~zero heap pressure.
+      if (decrypted.plaintextLength > _saveBytesWarnThreshold) {
+        final saved = await _saveToExternalStorage(decrypted);
+        if (saved != null) setState(() => _savedPath = saved);
+        return;
+      }
+      // Small-file fast path: `file_picker.saveFile(bytes:)` uses SAF
+      // on Android and iOS document picker on iOS. Peak memory =
+      // plaintext size (once); fine for < 200 MiB.
       final bytes = await File(decrypted.plaintextPath).readAsBytes();
       final result = await FilePicker.platform.saveFile(
         dialogTitle: 'Save decrypted file',
@@ -149,6 +160,71 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// Fallback save path for files too big to fit in `saveFile(bytes:)`.
+  /// Copies the plaintext temp file (streaming, via `File.copy`) into
+  /// the app-external files directory under an `OpaqueShare/` subfolder,
+  /// then deletes the source temp. Peak memory ≈ Dart I/O buffers.
+  ///
+  /// The destination path is user-visible under
+  /// `Android/data/<pkg>/files/OpaqueShare/` in most file managers.
+  /// Not as slick as SAF but reliable for multi-GB receives. A proper
+  /// SAF stream-write via platform channel is the follow-up (ADR-0006
+  /// "Open follow-ups").
+  Future<String?> _saveToExternalStorage(DecryptedTransfer decrypted) async {
+    final Directory? baseDir;
+    try {
+      // Android: `/storage/emulated/0/Android/data/<pkg>/files`.
+      // iOS: throws — fall back to app-documents (visible via Files
+      // app under "On My iPhone > OpaqueShare").
+      baseDir = Platform.isAndroid
+          ? await getExternalStorageDirectory()
+          : await getApplicationDocumentsDirectory();
+    } on Object catch (exc) {
+      setState(() => _error = 'Could not open save directory: $exc');
+      return null;
+    }
+    if (baseDir == null) {
+      setState(
+        () => _error = 'Save directory is not available on this device.',
+      );
+      return null;
+    }
+    final saveDir = Directory('${baseDir.path}/OpaqueShare');
+    if (!await saveDir.exists()) {
+      await saveDir.create(recursive: true);
+    }
+    final finalPath = await _uniquePath(saveDir.path, decrypted.filename);
+    try {
+      await File(decrypted.plaintextPath).copy(finalPath);
+      // Copy succeeded — drop the source temp file to reclaim space.
+      await _deleteIfExists(decrypted.plaintextPath);
+    } on Object catch (exc) {
+      // Best-effort: try to remove a half-written destination if the
+      // copy died partway.
+      await _deleteIfExists(finalPath);
+      setState(() => _error = 'Save failed: $exc');
+      return null;
+    }
+    return finalPath;
+  }
+
+  /// Return `<dir>/<name>` unless it already exists; then append -1,
+  /// -2, … before the extension until we find a free slot. Prevents
+  /// silently clobbering a same-named file the user saved earlier.
+  Future<String> _uniquePath(String dir, String name) async {
+    var candidate = '$dir/$name';
+    if (!await File(candidate).exists()) return candidate;
+    final dot = name.lastIndexOf('.');
+    final stem = dot > 0 ? name.substring(0, dot) : name;
+    final ext = dot > 0 ? name.substring(dot) : '';
+    for (var i = 1; i < 1000; i++) {
+      candidate = '$dir/$stem-$i$ext';
+      if (!await File(candidate).exists()) return candidate;
+    }
+    // Absurdly unlikely — bail out with the last candidate.
+    return candidate;
   }
 
   Future<void> _ack() async {
@@ -424,10 +500,11 @@ class _ReceiveProgress extends StatelessWidget {
   }
 }
 
-/// Banner shown before the SAF save button when the plaintext is
-/// large enough that the save step might OOM on mid-range Android
-/// devices. Documented in ADR-0006 as the residual gap; true
-/// streaming save into a SAF URI is a follow-up.
+/// Banner shown before the save button when the plaintext exceeds
+/// the SAF-with-bytes ceiling. Explains where the file will actually
+/// land — the save step skips SAF and copies to app-external storage
+/// (ADR-0006 hotfix). A true native SAF stream-write is the
+/// follow-up.
 class _LargeFileWarning extends StatelessWidget {
   const _LargeFileWarning({required this.size});
   final int size;
@@ -438,7 +515,7 @@ class _LargeFileWarning extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: scheme.errorContainer,
+        color: scheme.tertiaryContainer,
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
@@ -446,12 +523,16 @@ class _LargeFileWarning extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(Icons.warning_amber, size: 18, color: scheme.onErrorContainer),
+              Icon(
+                Icons.info_outline,
+                size: 18,
+                color: scheme.onTertiaryContainer,
+              ),
               const SizedBox(width: 8),
               Text(
                 'Large file',
                 style: TextStyle(
-                  color: scheme.onErrorContainer,
+                  color: scheme.onTertiaryContainer,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -459,12 +540,13 @@ class _LargeFileWarning extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            'The decrypted file is bigger than 200 MiB. Saving very '
-            "large files can fail on mid-range phones if there isn't "
-            'enough free memory at the save step. If the save button '
-            'errors, close some apps and try again.',
+            'The decrypted file is bigger than 200 MiB — the system '
+            "file picker isn't reliable at this size. It'll be copied "
+            "straight into the OpaqueShare folder under this app's "
+            'external storage instead, and the exact path will be '
+            'shown when the save finishes.',
             style: TextStyle(
-              color: scheme.onErrorContainer,
+              color: scheme.onTertiaryContainer,
               fontSize: 12,
             ),
           ),
