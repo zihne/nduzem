@@ -291,7 +291,9 @@ class TransferService {
     // `http.StreamedRequest` complications for a fast path that
     // doesn't need them.
     final body = await ciphertextFile.readAsBytes();
-    final putRes = await _httpClient.put(Uri.parse(uploadUrl), body: body);
+    final putRes = await runWithNetworkErrorTranslation(
+      () => _httpClient.put(Uri.parse(uploadUrl), body: body),
+    );
     if (putRes.statusCode < 200 || putRes.statusCode >= 300) {
       throw ApiException(
         statusCode: putRes.statusCode,
@@ -327,7 +329,9 @@ class TransferService {
         final len = remaining < plan.partSize ? remaining : plan.partSize;
         await raf.setPosition(offset);
         final body = await raf.read(len);
-        final res = await _httpClient.put(Uri.parse(partUrl.url), body: body);
+        final res = await runWithNetworkErrorTranslation(
+          () => _httpClient.put(Uri.parse(partUrl.url), body: body),
+        );
         if (res.statusCode < 200 || res.statusCode >= 300) {
           throw ApiException(
             statusCode: res.statusCode,
@@ -541,7 +545,9 @@ class TransferService {
     required CancelToken? cancel,
   }) async {
     final request = http.Request('GET', Uri.parse(url));
-    final resp = await _httpClient.send(request);
+    final resp = await runWithNetworkErrorTranslation(
+      () => _httpClient.send(request),
+    );
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
       throw ApiException(
         statusCode: resp.statusCode,
@@ -563,17 +569,26 @@ class TransferService {
     const emitEvery = Duration(milliseconds: 250);
     try {
       onProgress?.call(ReceivePhase.downloading, 0, totalBytes);
-      await for (final chunk in resp.stream) {
-        cancel?.throwIfCancelled();
-        sink.add(chunk);
-        hasher.add(chunk);
-        received += chunk.length;
-        final now = DateTime.now();
-        if (now.difference(lastEmitAt) >= emitEvery) {
-          lastEmitAt = now;
-          onProgress?.call(ReceivePhase.downloading, received, totalBytes);
+      // Wrap the stream iteration in the same translator — the socket
+      // can drop mid-download and surface as ClientException or
+      // SocketException from inside the async iterator.
+      await runWithNetworkErrorTranslation(() async {
+        await for (final chunk in resp.stream) {
+          cancel?.throwIfCancelled();
+          sink.add(chunk);
+          hasher.add(chunk);
+          received += chunk.length;
+          final now = DateTime.now();
+          if (now.difference(lastEmitAt) >= emitEvery) {
+            lastEmitAt = now;
+            onProgress?.call(
+              ReceivePhase.downloading,
+              received,
+              totalBytes,
+            );
+          }
         }
-      }
+      });
       // Final tick.
       onProgress?.call(ReceivePhase.downloading, received, totalBytes);
       await sink.flush();

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show SocketException;
 
 import 'package:http/http.dart' as http;
 
@@ -21,6 +22,53 @@ class ApiException implements Exception {
 
   @override
   String toString() => 'ApiException(status=$statusCode, message=$message)';
+}
+
+/// Network was unreachable — DNS failure, connection refused, TLS
+/// reset, timeout, etc. Subclass of [ApiException] so existing catch
+/// blocks pick up the friendly `.message` automatically; callers who
+/// want to distinguish (e.g. offer a retry vs. suggest checking
+/// credentials) can type-check for this class.
+///
+/// The `.message` is deliberately user-facing (kept short, no jargon)
+/// so screens can render it verbatim without further wrapping. The
+/// original driver's message is stashed on `technicalDetail` for
+/// logging / debugging.
+class NetworkUnreachableException extends ApiException {
+  NetworkUnreachableException({this.technicalDetail})
+      : super(
+          statusCode: 0,
+          message:
+              "Couldn't reach the server. Check your connection and try again.",
+        );
+
+  final String? technicalDetail;
+
+  @override
+  String toString() =>
+      'NetworkUnreachableException(detail=${technicalDetail ?? '(none)'})';
+}
+
+/// Translate a raw async operation's network failures into a
+/// [NetworkUnreachableException]. Catches [http.ClientException],
+/// [SocketException], and [TimeoutException] — the three classes of
+/// "we couldn't reach the other side" that show up on the storage
+/// upload/download path (which doesn't go through [ApiClient]).
+///
+/// Anything else propagates unchanged so callers still see the true
+/// failure for non-network bugs.
+Future<T> runWithNetworkErrorTranslation<T>(Future<T> Function() op) async {
+  try {
+    return await op();
+  } on http.ClientException catch (exc) {
+    throw NetworkUnreachableException(technicalDetail: exc.message);
+  } on SocketException catch (exc) {
+    throw NetworkUnreachableException(technicalDetail: exc.message);
+  } on TimeoutException catch (exc) {
+    throw NetworkUnreachableException(
+      technicalDetail: exc.message ?? 'timeout',
+    );
+  }
 }
 
 /// Token-bearer supplier + refresher. The API client stays ignorant of *how*
@@ -99,14 +147,10 @@ class ApiClient {
   }
 
   Future<http.Response> _dispatch(http.Request request) async {
-    try {
+    return runWithNetworkErrorTranslation(() async {
       final streamed = await _http.send(request);
       return http.Response.fromStream(streamed);
-    } on http.ClientException catch (exc) {
-      throw ApiException(statusCode: 0, message: 'Network error: ${exc.message}');
-    } on TimeoutException {
-      throw ApiException(statusCode: 0, message: 'Request timed out.');
-    }
+    });
   }
 
   Map<String, dynamic> _decode(http.Response response) {
