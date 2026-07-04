@@ -1,7 +1,9 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mime/mime.dart' show lookupMimeType;
@@ -35,10 +37,21 @@ class SendScreen extends ConsumerStatefulWidget {
 
 class _SendScreenState extends ConsumerState<SendScreen> {
   final _lookup = TextEditingController();
+  final _linkPassword = TextEditingController();
   _PickedFile? _file;
   UserLookup? _recipient;
   Fingerprint? _recipientFp;
   VerifiedContact? _priorVerification;
+
+  /// Which end-to-end send path the UI is composed for (ADR-0005).
+  /// `app` shows the recipient-lookup + fingerprint UX; `link` shows
+  /// the optional-password + max-downloads UX and skips the
+  /// recipient-side plumbing entirely.
+  SendMode _mode = SendMode.app;
+
+  /// Server allows 1-10; UI offers a small set of sensible values.
+  int _maxDownloads = 1;
+
   bool _busy = false;
   String? _error;
 
@@ -61,6 +74,7 @@ class _SendScreenState extends ConsumerState<SendScreen> {
   @override
   void dispose() {
     _lookup.dispose();
+    _linkPassword.dispose();
     super.dispose();
   }
 
@@ -172,8 +186,18 @@ class _SendScreenState extends ConsumerState<SendScreen> {
 
   Future<void> _send() async {
     final file = _file;
-    final recipient = _recipient;
-    if (file == null || recipient == null) return;
+    if (file == null) return;
+    // App mode requires a resolved recipient; link mode never uses one.
+    if (_mode == SendMode.app && _recipient == null) return;
+    final linkPassword = _linkPassword.text.trim();
+    if (_mode == SendMode.link &&
+        linkPassword.isNotEmpty &&
+        linkPassword.length < 4) {
+      setState(
+        () => _error = 'Password must be at least 4 characters.',
+      );
+      return;
+    }
     final cancel = CancelToken();
     setState(() {
       _busy = true;
@@ -189,14 +213,21 @@ class _SendScreenState extends ConsumerState<SendScreen> {
     final messenger = ScaffoldMessenger.of(context);
     final router = GoRouter.of(context);
     final recipientLabel = _lookup.text.trim();
+    final appConfig = ref.read(appConfigProvider);
     try {
       final svc = await ref.read(transferServiceProvider.future);
       final result = await svc.send(
-        recipient: recipient,
+        mode: _mode,
+        recipient: _mode == SendMode.app ? _recipient : null,
         plaintextPath: file.path,
         plaintextLength: file.length,
         filename: file.name,
         mime: file.mime,
+        linkPassword:
+            _mode == SendMode.link && linkPassword.isNotEmpty
+                ? linkPassword
+                : null,
+        maxDownloads: _mode == SendMode.link ? _maxDownloads : 1,
         onProgress: (phase, done, total) {
           if (!mounted) return;
           setState(() {
@@ -207,23 +238,41 @@ class _SendScreenState extends ConsumerState<SendScreen> {
         },
         cancel: cancel,
       );
-      // Success: forced acknowledgement dialog. Barrier-dismissible
-      // is false so a distracted user cannot swipe past it — the only
-      // way out is the Done button, which then navigates home. Avoids
-      // (a) leaving the primary "Encrypt and send" button pointed at
-      // the same recipient/file (accidental resend) AND (b) the
-      // snackbar auto-hiding before the user notices.
       if (!mounted) return;
-      await showDialog<void>(
-        context: context,
-        barrierDismissible: false,
-        builder: (dialogContext) => _SendCompleteDialog(
-          filename: file.name,
-          byteCount: result.byteCountOnServer,
-          recipientLabel: recipientLabel,
-          transferId: result.transferId,
-        ),
-      );
+      // Forced-acknowledgement dialog. `barrierDismissible: false` so
+      // a distracted user cannot swipe past it — the only way out is
+      // the button, which then navigates home. Distinct dialog per
+      // mode (app-mode confirms the recipient; link-mode surfaces the
+      // shareable URL — ADR-0005).
+      if (result.mode == SendMode.link) {
+        final shareUrl = _buildLinkUrl(
+          appConfig.apiBaseUrl,
+          result.transferId,
+          result.linkFileKey!,
+        );
+        await showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (dialogContext) => _LinkCreatedDialog(
+            filename: file.name,
+            byteCount: result.byteCountOnServer,
+            hasPassword: linkPassword.isNotEmpty,
+            maxDownloads: _maxDownloads,
+            shareUrl: shareUrl,
+          ),
+        );
+      } else {
+        await showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (dialogContext) => _SendCompleteDialog(
+            filename: file.name,
+            byteCount: result.byteCountOnServer,
+            recipientLabel: recipientLabel,
+            transferId: result.transferId,
+          ),
+        );
+      }
       router.go('/');
       return;
     } on SendCancelledException {
@@ -253,6 +302,34 @@ class _SendScreenState extends ConsumerState<SendScreen> {
 
   void _cancelSend() {
     _cancel?.cancel();
+  }
+
+  /// Whether the Send button should be enabled given the current state.
+  /// - App mode: file picked AND recipient resolved.
+  /// - Link mode: file picked (password + max downloads are optional).
+  bool get _sendEnabled {
+    if (_busy || _file == null) return false;
+    if (_mode == SendMode.app) return _recipient != null;
+    return true;
+  }
+
+  /// Assemble `<origin>/r/<transferId>#<K_file>` — the URL the web
+  /// decrypt page (ADR-0035) expects. K_file is base64url without
+  /// padding to match the JS side's `atob` restoration logic. The
+  /// fragment is client-side only; the server never sees K_file.
+  String _buildLinkUrl(
+    Uri apiBaseUrl,
+    String transferId,
+    List<int> fileKey,
+  ) {
+    final k = base64UrlEncode(fileKey).replaceAll('=', '');
+    // apiBaseUrl may or may not end in `/` — use `resolve` to compose.
+    final base = apiBaseUrl.replace(
+      path: apiBaseUrl.path.endsWith('/')
+          ? '${apiBaseUrl.path}r/$transferId'
+          : '${apiBaseUrl.path}/r/$transferId',
+    );
+    return '$base#$k';
   }
 
   @override
@@ -295,73 +372,150 @@ class _SendScreenState extends ConsumerState<SendScreen> {
 
             const SizedBox(height: 24),
 
-            // Stage 1b: recipient lookup
-            const Text(
-              'To',
-              style: TextStyle(fontWeight: FontWeight.w500),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _lookup,
-              keyboardType: TextInputType.emailAddress,
-              decoration: const InputDecoration(labelText: 'Email or @handle'),
-            ),
-            const SizedBox(height: 8),
-            OutlinedButton.icon(
-              onPressed: _busy ? null : _lookupRecipient,
-              icon: const Icon(Icons.search),
-              label: const Text('Look up recipient'),
+            // Stage 1b: mode selector — user vs shareable link (ADR-0005).
+            SegmentedButton<SendMode>(
+              segments: const [
+                ButtonSegment(
+                  value: SendMode.app,
+                  label: Text('To a user'),
+                  icon: Icon(Icons.person),
+                ),
+                ButtonSegment(
+                  value: SendMode.link,
+                  label: Text('Share as link'),
+                  icon: Icon(Icons.link),
+                ),
+              ],
+              selected: {_mode},
+              onSelectionChanged: _busy
+                  ? null
+                  : (s) => setState(() {
+                        _mode = s.first;
+                        _error = null;
+                      }),
             ),
 
-            // Stage 2: fingerprint state
-            if (_recipient != null && _recipientFp != null) ...[
-              const SizedBox(height: 24),
-              const Divider(),
+            const SizedBox(height: 24),
+
+            if (_mode == SendMode.app) ...[
+              // Stage 2a — app mode: recipient lookup + fingerprint.
+              const Text(
+                'To',
+                style: TextStyle(fontWeight: FontWeight.w500),
+              ),
               const SizedBox(height: 8),
+              TextField(
+                controller: _lookup,
+                keyboardType: TextInputType.emailAddress,
+                decoration:
+                    const InputDecoration(labelText: 'Email or @handle'),
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: _busy ? null : _lookupRecipient,
+                icon: const Icon(Icons.search),
+                label: const Text('Look up recipient'),
+              ),
+              if (_recipient != null && _recipientFp != null) ...[
+                const SizedBox(height: 24),
+                const Divider(),
+                const SizedBox(height: 8),
+                Text(
+                  "Recipient's fingerprint",
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 8),
+                SelectableText(
+                  _recipientFp!.display,
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 16,
+                    letterSpacing: 1.1,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                _FingerprintBanner(
+                  fingerprint: _recipientFp!,
+                  prior: _priorVerification,
+                ),
+              ],
+            ] else ...[
+              // Stage 2b — link mode: optional password + max downloads.
+              const Text(
+                'Password (optional)',
+                style: TextStyle(fontWeight: FontWeight.w500),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _linkPassword,
+                obscureText: true,
+                enabled: !_busy,
+                decoration: const InputDecoration(
+                  labelText: 'At least 4 characters',
+                ),
+              ),
+              const SizedBox(height: 4),
               Text(
-                "Recipient's fingerprint",
-                style: Theme.of(context).textTheme.titleMedium,
+                'Share this password with the recipient out-of-band. '
+                'It gates the download but does not encrypt the file.',
+                style: Theme.of(context).textTheme.bodySmall,
               ),
-              const SizedBox(height: 8),
-              SelectableText(
-                _recipientFp!.display,
-                style: const TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 16,
-                  letterSpacing: 1.1,
-                ),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  const Text(
+                    'Max downloads: ',
+                    style: TextStyle(fontWeight: FontWeight.w500),
+                  ),
+                  const SizedBox(width: 8),
+                  DropdownButton<int>(
+                    value: _maxDownloads,
+                    onChanged: _busy
+                        ? null
+                        : (v) => setState(() => _maxDownloads = v ?? 1),
+                    items: const [
+                      DropdownMenuItem(value: 1, child: Text('1')),
+                      DropdownMenuItem(value: 3, child: Text('3')),
+                      DropdownMenuItem(value: 10, child: Text('10')),
+                    ],
+                  ),
+                ],
               ),
-              const SizedBox(height: 8),
-              _FingerprintBanner(
-                fingerprint: _recipientFp!,
-                prior: _priorVerification,
-              ),
-              const SizedBox(height: 16),
-              if (_busy && _cancel != null) ...[
-                _SendProgress(
-                  phase: _phase,
-                  done: _uploadedBytes,
-                  total: _totalBytes,
-                ),
-                const SizedBox(height: 12),
-                OutlinedButton.icon(
-                  onPressed: _cancelSend,
-                  icon: const Icon(Icons.cancel),
-                  label: const Text('Cancel'),
-                ),
-              ] else
-                FilledButton.icon(
-                  onPressed: _busy || _file == null ? null : _send,
-                  icon: const Icon(Icons.send),
-                  label: _busy
-                      ? const SizedBox(
-                          height: 20,
-                          width: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Text('Encrypt and send'),
-                ),
             ],
+
+            // Send action (shared across modes) — disabled unless the
+            // required state per mode is in place.
+            const SizedBox(height: 20),
+            if (_busy && _cancel != null) ...[
+              _SendProgress(
+                phase: _phase,
+                done: _uploadedBytes,
+                total: _totalBytes,
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: _cancelSend,
+                icon: const Icon(Icons.cancel),
+                label: const Text('Cancel'),
+              ),
+            ] else
+              FilledButton.icon(
+                onPressed: _sendEnabled ? _send : null,
+                icon: Icon(
+                  _mode == SendMode.link ? Icons.link : Icons.send,
+                ),
+                label: _busy
+                    ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Text(
+                        _mode == SendMode.link
+                            ? 'Create shareable link'
+                            : 'Encrypt and send',
+                      ),
+              ),
 
             if (_error != null) ...[
               const SizedBox(height: 16),
@@ -439,6 +593,104 @@ class _SendCompleteDialog extends StatelessWidget {
         ],
       ),
       actions: [
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Done'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Modal acknowledgement after a successful link-mode send
+/// (ADR-0005). Primary content is the shareable URL — presented as
+/// selectable monospace text with a big "Copy link" button beneath.
+/// Barrier-dismissible false at the caller so the user MUST tap
+/// Done, avoiding the "screen closed before I copied the URL" bug
+/// that killed the earlier snackbar-based flow.
+class _LinkCreatedDialog extends StatelessWidget {
+  const _LinkCreatedDialog({
+    required this.filename,
+    required this.byteCount,
+    required this.hasPassword,
+    required this.maxDownloads,
+    required this.shareUrl,
+  });
+  final String filename;
+  final int byteCount;
+  final bool hasPassword;
+  final int maxDownloads;
+  final String shareUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return AlertDialog(
+      icon: Icon(Icons.link, color: scheme.primary, size: 32),
+      title: const Text('Link created'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _DialogRow(label: 'File', value: filename),
+            const SizedBox(height: 6),
+            _DialogRow(label: 'Size', value: _prettyBytes(byteCount)),
+            const SizedBox(height: 6),
+            _DialogRow(
+              label: 'Uses',
+              value: maxDownloads == 1
+                  ? '1 download'
+                  : 'up to $maxDownloads downloads',
+            ),
+            if (hasPassword) ...[
+              const SizedBox(height: 6),
+              _DialogRow(
+                label: 'Extra',
+                value: 'password required at download',
+              ),
+            ],
+            const SizedBox(height: 16),
+            Text(
+              'Shareable link',
+              style: Theme.of(context).textTheme.labelSmall,
+            ),
+            const SizedBox(height: 4),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: SelectableText(
+                shareUrl,
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 11,
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Anyone with this link can decrypt the file. Share it '
+              "out-of-band; don't post it publicly.",
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton.icon(
+          onPressed: () async {
+            await Clipboard.setData(ClipboardData(text: shareUrl));
+            if (!context.mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Link copied.')),
+            );
+          },
+          icon: const Icon(Icons.copy),
+          label: const Text('Copy link'),
+        ),
         FilledButton(
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Done'),

@@ -13,35 +13,56 @@ class TransfersApi {
   const TransfersApi(this._client);
   final ApiClient _client;
 
-  /// POST `/v1/transfers/initiate`. Response shape depends on declared
-  /// byte_count: single-shot (M2 path) or multipart (M4 path, server
-  /// ADR-0012). The two shapes are represented in the same
-  /// [InitiateTransferResponse] — exactly one of `uploadUrl` /
+  /// POST `/v1/transfers/initiate` — either `app` mode (recipient has
+  /// an account, K_file sealed to their identity_pub) or `link` mode
+  /// (recipient has no account, K_file lives in the URL fragment —
+  /// server never sees it). Server-side response shape depends on
+  /// declared byte_count: single-shot (M2 path) or multipart (M4
+  /// path, server ADR-0012). The two shapes are represented in the
+  /// same [InitiateTransferResponse] — exactly one of `uploadUrl` /
   /// `multipart` is populated.
+  ///
+  /// App-mode required: `recipientId`, `wrappedKeyB64`.
+  /// Link-mode required: neither. Optional: `linkPassword` (adds an
+  /// out-of-band gate at download time), `recipientEmail` (stored
+  /// server-side as a blind index for a future "links sent to me"
+  /// inbox — see server ADR-0014).
   Future<InitiateTransferResponse> initiate({
-    required String recipientId,
+    required String mode,
     required int byteCount,
     required String blobSha256Hex,
-    required String wrappedKeyB64,
     required String encHeaderB64,
     required String signatureB64,
+    String? recipientId,
+    String? wrappedKeyB64,
+    String? linkPassword,
+    String? recipientEmail,
     int cryptoSuite = 1,
     int maxDownloads = 1,
   }) async {
+    assert(mode == 'app' || mode == 'link', 'unknown mode: $mode');
+    assert(
+      mode != 'app' || (recipientId != null && wrappedKeyB64 != null),
+      'app mode requires recipientId + wrappedKeyB64',
+    );
+    final payload = <String, dynamic>{
+      'mode': mode,
+      'byte_count': byteCount,
+      'blob_sha256': blobSha256Hex,
+      'crypto_suite': cryptoSuite,
+      'enc_header': encHeaderB64,
+      'signature': signatureB64,
+      'max_downloads': maxDownloads,
+    };
+    if (recipientId != null) payload['recipient_id'] = recipientId;
+    if (wrappedKeyB64 != null) payload['wrapped_key'] = wrappedKeyB64;
+    if (linkPassword != null) payload['link_password'] = linkPassword;
+    if (recipientEmail != null) payload['recipient_email'] = recipientEmail;
+
     final body = await _client.post(
       '/v1/transfers/initiate',
       authed: true,
-      body: {
-        'mode': 'app',
-        'recipient_id': recipientId,
-        'byte_count': byteCount,
-        'blob_sha256': blobSha256Hex,
-        'crypto_suite': cryptoSuite,
-        'wrapped_key': wrappedKeyB64,
-        'enc_header': encHeaderB64,
-        'signature': signatureB64,
-        'max_downloads': maxDownloads,
-      },
+      body: payload,
     );
     final multipartJson = body['multipart'];
     MultipartUploadPlan? multipart;

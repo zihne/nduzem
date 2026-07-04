@@ -30,6 +30,7 @@ void main() {
       );
 
       final res = await api.initiate(
+        mode: 'app',
         recipientId: 'u-42',
         byteCount: 1024,
         blobSha256Hex: 'a' * 64,
@@ -70,6 +71,7 @@ void main() {
         },
       );
       final res = await api.initiate(
+        mode: 'app',
         recipientId: 'u-42',
         byteCount: 1024,
         blobSha256Hex: 'a' * 64,
@@ -99,6 +101,7 @@ void main() {
         },
       );
       final res = await api.initiate(
+        mode: 'app',
         recipientId: 'u-42',
         byteCount: 12000000,
         blobSha256Hex: 'b' * 64,
@@ -113,6 +116,87 @@ void main() {
       expect(res.multipart!.parts, hasLength(2));
       expect(res.multipart!.parts[0].partNumber, 1);
       expect(res.multipart!.parts[1].url, 'https://r2.example/put/2');
+    });
+
+    test('link-mode envelope omits recipient_id + wrapped_key (ADR-0005)',
+        () async {
+      when(
+        () => client.post(
+          any(),
+          body: any(named: 'body'),
+          authed: any(named: 'authed'),
+        ),
+      ).thenAnswer(
+        (_) async => <String, dynamic>{
+          'transfer_id': 't-link',
+          'storage_key': 'obj/link',
+          'upload_url': 'https://r2.example/put',
+        },
+      );
+
+      await api.initiate(
+        mode: 'link',
+        byteCount: 1024,
+        blobSha256Hex: 'c' * 64,
+        encHeaderB64: 'EH',
+        signatureB64: 'SIG',
+        linkPassword: 'hunter2',
+        maxDownloads: 3,
+      );
+
+      final captured = verify(
+        () => client.post(
+          '/v1/transfers/initiate',
+          body: captureAny(named: 'body'),
+          authed: any(named: 'authed'),
+        ),
+      ).captured.single as Map<String, dynamic>;
+      expect(captured['mode'], 'link');
+      expect(captured['link_password'], 'hunter2');
+      expect(captured['max_downloads'], 3);
+      // Server treats missing recipient_id / wrapped_key as
+      // "link-mode is not sealed to anyone" — critical for the mode
+      // dispatch to work, so we assert absence explicitly.
+      expect(captured.containsKey('recipient_id'), isFalse);
+      expect(captured.containsKey('wrapped_key'), isFalse);
+      expect(captured.containsKey('recipient_email'), isFalse);
+    });
+
+    test('link-mode without password omits the field entirely', () async {
+      when(
+        () => client.post(
+          any(),
+          body: any(named: 'body'),
+          authed: any(named: 'authed'),
+        ),
+      ).thenAnswer(
+        (_) async => <String, dynamic>{
+          'transfer_id': 't-link-nopwd',
+          'storage_key': 'obj/link',
+          'upload_url': 'https://r2.example/put',
+        },
+      );
+
+      await api.initiate(
+        mode: 'link',
+        byteCount: 1024,
+        blobSha256Hex: 'c' * 64,
+        encHeaderB64: 'EH',
+        signatureB64: 'SIG',
+      );
+
+      final captured = verify(
+        () => client.post(
+          '/v1/transfers/initiate',
+          body: captureAny(named: 'body'),
+          authed: any(named: 'authed'),
+        ),
+      ).captured.single as Map<String, dynamic>;
+      expect(captured['mode'], 'link');
+      // Omitting the key altogether — the server's Pydantic model
+      // treats missing vs null differently for the mode-validation
+      // check, so we do NOT want `link_password: null` on the wire.
+      expect(captured.containsKey('link_password'), isFalse);
     });
   });
 
