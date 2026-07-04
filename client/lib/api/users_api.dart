@@ -34,6 +34,11 @@ class UsersApi {
 
   /// Look up a user by email OR handle (exactly one of the two).
   ///
+  /// POST-with-body (not GET-with-query) so the email / handle value
+  /// never rides in a URL — that keeps it out of the server's access
+  /// log, and out of any reverse-proxy / cloud request log downstream.
+  /// See server ADR-0022 amendment 2026-07-02.
+  ///
   /// Returns the raw public-key bytes so the caller can compute the
   /// fingerprint locally rather than trusting the server's echo. That's
   /// the whole point of OOB verification — we never take the server's
@@ -43,16 +48,15 @@ class UsersApi {
       (email == null) != (handle == null),
       'Provide exactly one of email or handle.',
     );
-    final params = <String, String>{};
-    if (email != null) params['email'] = email;
-    if (handle != null) params['handle'] = handle;
-    final query = params.entries
-        .map(
-          (e) =>
-              '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}',
-        )
-        .join('&');
-    final body = await _client.get('/v1/users/lookup?$query', authed: true);
+    final payload = <String, dynamic>{
+      if (email != null) 'email': email,
+      if (handle != null) 'handle': handle,
+    };
+    final body = await _client.post(
+      '/v1/users/lookup',
+      body: payload,
+      authed: true,
+    );
     return UserLookup(
       userId: body['user_id'] as String,
       identityPublic: Uint8List.fromList(

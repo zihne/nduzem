@@ -19,8 +19,17 @@ void main() {
     api = UsersApi(client);
   });
 
-  test('lookup(email) issues an authed GET with URL-encoded email', () async {
-    when(() => client.get(any(), authed: any(named: 'authed'))).thenAnswer(
+  test('lookup(email) POSTs the email in the request body', () async {
+    // POST-with-body (not GET-with-query) keeps the email off the URL
+    // so it can't leak into server access logs — server ADR-0022
+    // amendment 2026-07-02.
+    when(
+      () => client.post(
+        any(),
+        body: any(named: 'body'),
+        authed: any(named: 'authed'),
+      ),
+    ).thenAnswer(
       (_) async => <String, dynamic>{
         'user_id': 'u-42',
         'identity_pub': base64Encode(List<int>.filled(32, 1)),
@@ -32,10 +41,17 @@ void main() {
     final result = await api.lookup(email: 'alice+work@example.com');
 
     final captured = verify(
-      () => client.get(captureAny(), authed: any(named: 'authed')),
-    ).captured.single as String;
-    expect(captured, startsWith('/v1/users/lookup?email='));
-    expect(captured, contains('alice%2Bwork%40example.com'));
+      () => client.post(
+        captureAny(),
+        body: captureAny(named: 'body'),
+        authed: any(named: 'authed'),
+      ),
+    ).captured;
+    expect(captured[0] as String, '/v1/users/lookup');
+    expect(
+      captured[1] as Map<String, dynamic>,
+      {'email': 'alice+work@example.com'},
+    );
     expect(result.userId, 'u-42');
     expect(result.identityPublic.length, 32);
     expect(result.signingPublic.length, 32);
@@ -90,8 +106,14 @@ void main() {
     expect(me.erasedAt, isNotNull);
   });
 
-  test('lookup(handle) uses the handle query parameter', () async {
-    when(() => client.get(any(), authed: any(named: 'authed'))).thenAnswer(
+  test('lookup(handle) POSTs the handle in the request body', () async {
+    when(
+      () => client.post(
+        any(),
+        body: any(named: 'body'),
+        authed: any(named: 'authed'),
+      ),
+    ).thenAnswer(
       (_) async => <String, dynamic>{
         'user_id': 'u-1',
         'identity_pub': base64Encode(List<int>.filled(32, 0)),
@@ -102,8 +124,13 @@ void main() {
 
     await api.lookup(handle: 'alice');
     final captured = verify(
-      () => client.get(captureAny(), authed: any(named: 'authed')),
-    ).captured.single as String;
-    expect(captured, '/v1/users/lookup?handle=alice');
+      () => client.post(
+        captureAny(),
+        body: captureAny(named: 'body'),
+        authed: any(named: 'authed'),
+      ),
+    ).captured;
+    expect(captured[0] as String, '/v1/users/lookup');
+    expect(captured[1] as Map<String, dynamic>, {'handle': 'alice'});
   });
 }
