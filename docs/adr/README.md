@@ -26,3 +26,4 @@ Status conventions:
 | [0003](0003-m4-client-multipart.md) | M4 — client chunked secretstream + multipart upload | Accepted |
 | [0004](0004-m4-streaming-send.md) | M4 — client streaming send from disk | Accepted |
 | [0005](0005-m5-link-mode-sender.md) | M5 — client-side link-mode sender | Accepted |
+| [0006](0006-m4-streaming-receive.md) | M4 — client streaming receive to disk | Accepted |

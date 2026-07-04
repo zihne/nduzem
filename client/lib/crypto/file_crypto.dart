@@ -305,7 +305,173 @@ class FileCrypto {
     }
   }
 
-  static String _randomId() {
+  /// Stream-decrypt `ciphertextPath` into a fresh plaintext temp file
+  /// (ADR-0006). Mirror of [encryptFileToTempFile] on the receive
+  /// side. Peak memory: ~one 64 KiB secretstream chunk + stream I/O
+  /// overhead — no copies of the plaintext or ciphertext held whole.
+  ///
+  /// The caller is responsible for deleting the returned plaintext
+  /// temp file after the recipient has saved or acked the transfer.
+  ///
+  /// Throws [FormatException] when the OS4S magic prefix is missing
+  /// (older-format ciphertext) and `SodiumException` on any AEAD
+  /// failure (byte corruption, truncation, wrong key). Reports
+  /// progress per-chunk via `onProgress(plaintextBytesWritten,
+  /// ciphertextBytesTotal)`. Cancellation via `throwIfCancelled` fires
+  /// per read chunk; on trip the partial plaintext file is deleted.
+  Future<DecryptedFileResult> decryptFileToTempFile({
+    required String ciphertextPath,
+    required Uint8List key,
+    Directory? tempDir,
+    void Function(int done, int total)? onProgress,
+    void Function()? throwIfCancelled,
+  }) async {
+    final tmpDir = tempDir ?? Directory.systemTemp;
+    if (!await tmpDir.exists()) {
+      await tmpDir.create(recursive: true);
+    }
+    final source = File(ciphertextPath);
+    final ctTotalBytes = await source.length();
+    final tempFile = File(
+      '${tmpDir.path}/opaqueshare-${_randomId()}.dec.tmp',
+    );
+
+    final secret = SecureKey.fromList(_sodium, key);
+    final sink = tempFile.openWrite();
+    var plaintextLength = 0;
+
+    try {
+      // Emit the ciphertext body (skipping the magic prefix) as a
+      // stream: header first (24 bytes), then successive ciphertext
+      // chunks of up to `aBytes + plaintextChunkBytes` each. Chunks
+      // may straddle read-from-disk boundaries — we re-frame here.
+      final ciphertextStream = _rechunkForPull(
+        source,
+        onProgress: onProgress,
+        totalBytes: ctTotalBytes,
+        throwIfCancelled: throwIfCancelled,
+      );
+
+      final plaintextStream = _sodium.crypto.secretStream.pullChunked(
+        cipherStream: ciphertextStream,
+        key: secret,
+        chunkSize: plaintextChunkBytes,
+      );
+
+      await for (final chunk in plaintextStream) {
+        sink.add(chunk);
+        plaintextLength += chunk.length;
+      }
+
+      await sink.flush();
+      await sink.close();
+
+      return DecryptedFileResult(
+        plaintextPath: tempFile.path,
+        plaintextLength: plaintextLength,
+      );
+    } on Object {
+      try {
+        await sink.close();
+      } on Object {
+        // ignore
+      }
+      try {
+        if (await tempFile.exists()) {
+          await tempFile.delete();
+        }
+      } on Object {
+        // ignore
+      }
+      rethrow;
+    } finally {
+      secret.dispose();
+    }
+  }
+
+  /// Read the ciphertext file and yield: (1) the OS4S magic prefix is
+  /// consumed and validated (not yielded — sodium doesn't want it);
+  /// (2) the secretstream header as the first stream event; (3)
+  /// successive ciphertext chunks of `ciphertextChunkBytes` bytes,
+  /// with the last chunk possibly smaller. Progress + cancel fire per
+  /// read chunk.
+  Stream<List<int>> _rechunkForPull(
+    File source, {
+    void Function(int done, int total)? onProgress,
+    required int totalBytes,
+    void Function()? throwIfCancelled,
+  }) async* {
+    final headerLen = _sodium.crypto.secretStream.headerBytes;
+    final magicLen = magicPrefix.length;
+    final targetChunkLen = ciphertextChunkBytes;
+
+    // A small buffer accumulates read chunks (which can be any size
+    // depending on the underlying I/O) until we can hand out
+    // (a) the magic prefix + header for validation and (b)
+    // targetChunkLen-sized ciphertext chunks matching the encrypt
+    // side's framing.
+    final buffer = BytesBuilder(copy: false);
+    var consumed = 0;
+    var magicChecked = false;
+    var headerEmitted = false;
+
+    // Yields buffered bytes as sized chunks. Emits the header first
+    // (if not yet emitted), then targetChunkLen-sized chunks. When
+    // `flushAll` is true, emits whatever's left as the final chunk.
+    Stream<List<int>> flush(bool flushAll) async* {
+      if (!magicChecked && buffer.length >= magicLen) {
+        final bytes = buffer.toBytes();
+        for (var i = 0; i < magicLen; i++) {
+          if (bytes[i] != magicPrefix[i]) {
+            throw const FormatException(
+              'ciphertext missing OS4S magic — was this uploaded by an '
+              'older client?',
+            );
+          }
+        }
+        buffer.clear();
+        buffer.add(bytes.sublist(magicLen));
+        magicChecked = true;
+      }
+      if (!headerEmitted && buffer.length >= headerLen) {
+        final bytes = buffer.toBytes();
+        yield Uint8List.sublistView(bytes, 0, headerLen);
+        buffer.clear();
+        buffer.add(bytes.sublist(headerLen));
+        headerEmitted = true;
+      }
+      while (headerEmitted && buffer.length >= targetChunkLen) {
+        final bytes = buffer.toBytes();
+        yield Uint8List.sublistView(bytes, 0, targetChunkLen);
+        buffer.clear();
+        buffer.add(bytes.sublist(targetChunkLen));
+      }
+      if (flushAll && buffer.length > 0) {
+        yield buffer.toBytes();
+        buffer.clear();
+      }
+    }
+
+    await for (final chunk in source.openRead()) {
+      throwIfCancelled?.call();
+      buffer.add(chunk);
+      consumed += chunk.length;
+      onProgress?.call(consumed, totalBytes);
+      yield* flush(false);
+    }
+    // Not enough bytes to even contain the magic + header → format
+    // error surfaced later by sodium; but we might have consumed
+    // fewer bytes than expected here without triggering a check.
+    // The stream close below signals end-of-stream to pullChunked.
+    yield* flush(true);
+  }
+
+  static String _randomId() => randomTempSlug();
+
+  /// Short, collision-resistant slug for temp-file names. Reused by
+  /// callers that build their own temp paths (e.g.
+  /// `TransferService.receive` for the intermediate ciphertext temp).
+  static String randomTempSlug() {
     final rng = Random.secure();
     final buf = StringBuffer();
     for (var i = 0; i < 8; i++) {
@@ -327,4 +493,16 @@ class EncryptedFileResult {
   final String ciphertextPath;
   final int ciphertextLength;
   final String blobSha256Hex;
+}
+
+/// Result of [FileCrypto.decryptFileToTempFile] (ADR-0006). The caller
+/// owns `plaintextPath` and MUST delete the file after the user has
+/// saved / opened / acked it — success, cancel, or error.
+class DecryptedFileResult {
+  const DecryptedFileResult({
+    required this.plaintextPath,
+    required this.plaintextLength,
+  });
+  final String plaintextPath;
+  final int plaintextLength;
 }

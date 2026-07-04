@@ -247,6 +247,178 @@ void main() {
       }
     }
   });
+
+  // --- streaming receive (ADR-0006) --------------------------------------
+
+  test(
+    'decryptFileToTempFile: multi-chunk file roundtrips via streaming encrypt',
+    () async {
+      if (skipReason != null) return;
+      final tempDir = await Directory.systemTemp.createTemp('opq-test-');
+      try {
+        final key = fc!.generateFileKey();
+        // ~3 chunks + tail so we exercise the multi-chunk path.
+        final plain = Uint8List.fromList(
+          List<int>.generate(
+            FileCrypto.plaintextChunkBytes * 3 + 12345,
+            (i) => (i * 91 + 7) & 0xff,
+          ),
+        );
+        final source = File('${tempDir.path}/source.bin');
+        await source.writeAsBytes(plain);
+
+        final enc = await fc!.encryptFileToTempFile(
+          plaintextPath: source.path,
+          key: key,
+          tempDir: tempDir,
+        );
+
+        int lastDone = -1;
+        int lastTotal = -1;
+        final dec = await fc!.decryptFileToTempFile(
+          ciphertextPath: enc.ciphertextPath,
+          key: key,
+          tempDir: tempDir,
+          onProgress: (done, total) {
+            lastDone = done;
+            lastTotal = total;
+          },
+        );
+
+        expect(dec.plaintextLength, plain.length);
+        expect(lastTotal, enc.ciphertextLength);
+        expect(lastDone, enc.ciphertextLength);
+
+        final gotBytes = await File(dec.plaintextPath).readAsBytes();
+        expect(gotBytes, plain);
+      } finally {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      }
+    },
+  );
+
+  test(
+    'decryptFileToTempFile: interop with in-memory encryptFile (both formats compatible)',
+    () async {
+      if (skipReason != null) return;
+      final tempDir = await Directory.systemTemp.createTemp('opq-test-');
+      try {
+        final key = fc!.generateFileKey();
+        final plain = Uint8List.fromList(
+          List<int>.generate(2000, (i) => i & 0xff),
+        );
+        // Encrypt in memory (the older path), write ciphertext to
+        // disk, then stream-decrypt. The streaming decrypt must
+        // accept the same OS4S container the in-memory encrypt
+        // produces.
+        final ct = await fc!.encryptFile(plaintext: plain, key: key);
+        final ctFile = File('${tempDir.path}/ct.bin');
+        await ctFile.writeAsBytes(ct);
+
+        final dec = await fc!.decryptFileToTempFile(
+          ciphertextPath: ctFile.path,
+          key: key,
+          tempDir: tempDir,
+        );
+
+        final gotBytes = await File(dec.plaintextPath).readAsBytes();
+        expect(gotBytes, plain);
+      } finally {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      }
+    },
+  );
+
+  test(
+    'decryptFileToTempFile: missing OS4S magic surfaces FormatException + cleans temp',
+    () async {
+      if (skipReason != null) return;
+      final tempDir = await Directory.systemTemp.createTemp('opq-test-');
+      try {
+        final key = fc!.generateFileKey();
+        // Non-OS4S bytes.
+        final bogus = File('${tempDir.path}/bogus.bin');
+        await bogus.writeAsBytes(
+          Uint8List.fromList(List<int>.filled(200, 0x42)),
+        );
+
+        await expectLater(
+          fc!.decryptFileToTempFile(
+            ciphertextPath: bogus.path,
+            key: key,
+            tempDir: tempDir,
+          ),
+          throwsA(isA<FormatException>()),
+        );
+
+        final leftovers = tempDir
+            .listSync()
+            .where((e) => e.path.endsWith('.dec.tmp'))
+            .toList();
+        expect(leftovers, isEmpty);
+      } finally {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      }
+    },
+  );
+
+  test(
+    'decryptFileToTempFile: cancel mid-decrypt deletes the partial temp file',
+    () async {
+      if (skipReason != null) return;
+      final tempDir = await Directory.systemTemp.createTemp('opq-test-');
+      try {
+        final key = fc!.generateFileKey();
+        final plain = Uint8List.fromList(
+          List<int>.generate(
+            FileCrypto.plaintextChunkBytes * 5,
+            (i) => i & 0xff,
+          ),
+        );
+        final source = File('${tempDir.path}/source.bin');
+        await source.writeAsBytes(plain);
+        final enc = await fc!.encryptFileToTempFile(
+          plaintextPath: source.path,
+          key: key,
+          tempDir: tempDir,
+        );
+
+        var callCount = 0;
+        void throwOnThirdCall() {
+          callCount++;
+          if (callCount >= 3) {
+            throw const _TestCancelled();
+          }
+        }
+
+        await expectLater(
+          fc!.decryptFileToTempFile(
+            ciphertextPath: enc.ciphertextPath,
+            key: key,
+            tempDir: tempDir,
+            throwIfCancelled: throwOnThirdCall,
+          ),
+          throwsA(isA<_TestCancelled>()),
+        );
+
+        final leftovers = tempDir
+            .listSync()
+            .where((e) => e.path.endsWith('.dec.tmp'))
+            .toList();
+        expect(leftovers, isEmpty);
+      } finally {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      }
+    },
+  );
 }
 
 class _TestCancelled implements Exception {
