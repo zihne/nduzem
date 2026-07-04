@@ -8,19 +8,22 @@ import '../../api/api_client.dart';
 import '../auth/auth_providers.dart';
 import 'transfer_service.dart';
 
-/// Four-stage flow (spec §5.3):
+/// Four-stage flow (spec §5.3), post-M4 streaming (ADR-0006):
 ///
-///   1. **Ready**    — explain what the tap will do.
-///   2. **Decrypted** — bytes in memory; show file info; the user picks
-///      where to save them via a native SAF / document picker.
-///   3. **Saved**    — show the destination the user chose, plus the
+///   1. **Ready**     — explain what the tap will do.
+///   2. **Downloading + decrypting** — two-phase streaming progress
+///      into two temp files (ciphertext then plaintext). Peak memory
+///      ≈ one 64 KiB chunk.
+///   3. **Decrypted** — the plaintext lives at a temp path; the user
+///      picks where to save it via the native SAF / document picker.
+///      The bytes are read into memory ONLY at save-time (peak =
+///      plaintext size, once).
+///   4. **Saved**     — show the destination the user chose, plus the
 ///      explicit "burn the sender's copy" button.
-///   4. **Acked**    — server-side burn queued.
+///   5. **Acked**     — server-side burn queued.
 ///
-/// The save-location prompt in stage 2 is the whole reason receive was
-/// refactored — the previous "app documents dir" was a sandboxed path
-/// (`/data/data/…/app_flutter`) invisible to Android's Files app or any
-/// third-party file manager without root.
+/// The plaintext temp file is deleted on ack, on user-cancel, on
+/// error, or on widget dispose — best-effort per path.
 class ReceiveScreen extends ConsumerStatefulWidget {
   const ReceiveScreen({super.key, required this.transferId});
   final String transferId;
@@ -29,6 +32,12 @@ class ReceiveScreen extends ConsumerStatefulWidget {
   ConsumerState<ReceiveScreen> createState() => _ReceiveScreenState();
 }
 
+/// Above this size, saveFile(bytes:) is at real risk of OOM on
+/// mid-range Android devices. The screen shows a warning banner and
+/// still attempts the save. True streaming save into a SAF URI is a
+/// follow-up (ADR-0006 "Open follow-ups").
+const int _saveBytesWarnThreshold = 200 * 1024 * 1024; // 200 MiB
+
 class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
   DecryptedTransfer? _decrypted;
   String? _savedPath;
@@ -36,22 +45,72 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
   bool _busy = false;
   String? _error;
 
+  // Streaming progress (ADR-0006). Non-null while `receive()` is in
+  // flight; cleared on completion or error.
+  ReceivePhase? _phase;
+  int? _phaseDone;
+  int? _phaseTotal;
+  CancelToken? _cancel;
+
+  @override
+  void dispose() {
+    // Best-effort cleanup of the plaintext temp file if the user
+    // backed out of the screen without acking. The OS temp dir is
+    // the backstop for a process-kill leak.
+    final path = _decrypted?.plaintextPath;
+    if (path != null) {
+      unawaited(_deleteIfExists(path));
+    }
+    super.dispose();
+  }
+
   Future<void> _download() async {
+    final cancel = CancelToken();
     setState(() {
       _busy = true;
       _error = null;
+      _phase = null;
+      _phaseDone = null;
+      _phaseTotal = null;
+      _cancel = cancel;
     });
     try {
       final svc = await ref.read(transferServiceProvider.future);
-      final res = await svc.receive(transferId: widget.transferId);
+      final res = await svc.receive(
+        transferId: widget.transferId,
+        cancel: cancel,
+        onProgress: (phase, done, total) {
+          if (!mounted) return;
+          setState(() {
+            _phase = phase;
+            _phaseDone = done;
+            _phaseTotal = total;
+          });
+        },
+      );
+      if (!mounted) return;
       setState(() => _decrypted = res);
+    } on SendCancelledException {
+      if (mounted) setState(() => _error = 'Download cancelled.');
     } on ApiException catch (exc) {
       setState(() => _error = exc.message);
     } on Object catch (exc) {
       setState(() => _error = 'Download failed: $exc');
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _phase = null;
+          _phaseDone = null;
+          _phaseTotal = null;
+          _cancel = null;
+        });
+      }
     }
+  }
+
+  void _cancelDownload() {
+    _cancel?.cancel();
   }
 
   Future<void> _saveAs() async {
@@ -62,20 +121,20 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
       _error = null;
     });
     try {
+      // Read plaintext from the temp file only at save time.
+      // `file_picker` 8.x still requires `bytes:` on Android — the
+      // path-based streaming save is a follow-up (ADR-0006).
+      final bytes = await File(decrypted.plaintextPath).readAsBytes();
       final result = await FilePicker.platform.saveFile(
         dialogTitle: 'Save decrypted file',
         fileName: decrypted.filename,
-        bytes: decrypted.plaintext,
+        bytes: bytes,
       );
       if (result == null) {
-        // User cancelled the dialog — leave the plaintext in memory so
-        // they can try again.
+        // User cancelled the dialog — leave the plaintext on disk
+        // so they can retry.
         return;
       }
-      // On Android with Storage Access Framework, `result` is the path
-      // that file_picker wrote to for us; on iOS/desktop it's the path
-      // the user picked. In every case, we can verify the file exists
-      // and report the location back so the user knows where it landed.
       final saved = File(result);
       if (!saved.existsSync()) {
         // Some Android variants return a content:// URI that isn't a
@@ -100,11 +159,27 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
     try {
       final svc = await ref.read(transferServiceProvider.future);
       await svc.ack(widget.transferId);
+      // Success: drop the plaintext temp file. Nothing else will
+      // consume it — the user has already saved via SAF above.
+      final path = _decrypted?.plaintextPath;
+      if (path != null) {
+        await _deleteIfExists(path);
+      }
+      if (!mounted) return;
       setState(() => _acked = true);
     } on ApiException catch (exc) {
       setState(() => _error = exc.message);
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _deleteIfExists(String path) async {
+    try {
+      final f = File(path);
+      if (await f.exists()) await f.delete();
+    } on Object {
+      // ignore
     }
   }
 
@@ -123,22 +198,42 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
                 'key. You choose where to save the file after.',
               ),
               const SizedBox(height: 16),
-              FilledButton.icon(
-                onPressed: _busy ? null : _download,
-                icon: const Icon(Icons.download),
-                label: _busy
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('Download and decrypt'),
-              ),
+              if (_busy && _cancel != null) ...[
+                _ReceiveProgress(
+                  phase: _phase,
+                  done: _phaseDone,
+                  total: _phaseTotal,
+                ),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  onPressed: _cancelDownload,
+                  icon: const Icon(Icons.cancel),
+                  label: const Text('Cancel'),
+                ),
+              ] else
+                FilledButton.icon(
+                  onPressed: _busy ? null : _download,
+                  icon: const Icon(Icons.download),
+                  label: _busy
+                      ? const SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Download and decrypt'),
+                ),
             ] else ...[
               _DecryptedCard(
                 decrypted: _decrypted!,
                 savedPath: _savedPath,
               ),
+              if (_decrypted!.plaintextLength > _saveBytesWarnThreshold &&
+                  _savedPath == null) ...[
+                const SizedBox(height: 12),
+                _LargeFileWarning(
+                  size: _decrypted!.plaintextLength,
+                ),
+              ],
               const SizedBox(height: 16),
               if (_savedPath == null) ...[
                 const Text(
@@ -201,6 +296,8 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
   }
 }
 
+// --- widgets ---------------------------------------------------------------
+
 /// One-liner reassurance under the file info. Explains, in plain
 /// English, whether the recipient's client checked the sender's
 /// Ed25519 signature over `blob_sha256`. "Not verified" is not an
@@ -256,7 +353,7 @@ class _DecryptedCard extends StatelessWidget {
             SelectableText(decrypted.filename),
             const SizedBox(height: 4),
             Text(
-              '${decrypted.byteCount} bytes'
+              '${decrypted.plaintextLength} bytes'
               '${decrypted.mime == null ? '' : ' · ${decrypted.mime}'}',
               style: const TextStyle(fontStyle: FontStyle.italic),
             ),
@@ -274,4 +371,110 @@ class _DecryptedCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Two-phase progress (ADR-0006). Mirrors the send screen's widget.
+class _ReceiveProgress extends StatelessWidget {
+  const _ReceiveProgress({
+    required this.phase,
+    required this.done,
+    required this.total,
+  });
+  final ReceivePhase? phase;
+  final int? done;
+  final int? total;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = total;
+    final d = done;
+    double? value;
+    if (t != null && t > 0 && d != null) {
+      value = (d / t).clamp(0.0, 1.0);
+    }
+    final phaseLabel = switch (phase) {
+      ReceivePhase.downloading => 'Downloading',
+      ReceivePhase.decrypting => 'Decrypting',
+      null => 'Starting',
+    };
+    String label;
+    if (value != null && d != null && t != null) {
+      label = '$phaseLabel · ${_mib(d)} / ${_mib(t)}'
+          ' (${(value * 100).toStringAsFixed(0)}%)';
+    } else {
+      label = '$phaseLabel…';
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        LinearProgressIndicator(value: value),
+        const SizedBox(height: 6),
+        Text(label, style: Theme.of(context).textTheme.bodySmall),
+      ],
+    );
+  }
+
+  static String _mib(int bytes) {
+    final gib = bytes / (1024 * 1024 * 1024);
+    if (gib >= 1) return '${gib.toStringAsFixed(2)} GiB';
+    final mib = bytes / (1024 * 1024);
+    if (mib >= 100) return '${mib.toStringAsFixed(0)} MiB';
+    if (mib >= 1) return '${mib.toStringAsFixed(1)} MiB';
+    return '${(bytes / 1024).toStringAsFixed(0)} KiB';
+  }
+}
+
+/// Banner shown before the SAF save button when the plaintext is
+/// large enough that the save step might OOM on mid-range Android
+/// devices. Documented in ADR-0006 as the residual gap; true
+/// streaming save into a SAF URI is a follow-up.
+class _LargeFileWarning extends StatelessWidget {
+  const _LargeFileWarning({required this.size});
+  final int size;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: scheme.errorContainer,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.warning_amber, size: 18, color: scheme.onErrorContainer),
+              const SizedBox(width: 8),
+              Text(
+                'Large file',
+                style: TextStyle(
+                  color: scheme.onErrorContainer,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'The decrypted file is bigger than 200 MiB. Saving very '
+            "large files can fail on mid-range phones if there isn't "
+            'enough free memory at the save step. If the save button '
+            'errors, close some apps and try again.',
+            style: TextStyle(
+              color: scheme.onErrorContainer,
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// Fire-and-forget helper used by dispose (no async keyword allowed).
+void unawaited(Future<void> f) {
+  f.ignore();
 }
