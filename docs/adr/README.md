@@ -30,3 +30,4 @@ Status conventions:
 | [0007](0007-client-transfer-history.md) | Client — local transfer history | Accepted |
 | [0008](0008-saf-stream-save.md) | Native SAF stream-save for large-file receive (Android) | Accepted |
 | [0009](0009-multi-file-batch-send.md) | Multi-file batch send (app mode) | Accepted |
+| [0010](0010-in-app-link-decrypt.md) | In-app link-mode receive (deep-link `/r/<id>#<K>`) | Accepted |

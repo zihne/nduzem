@@ -15,6 +15,7 @@ import 'features/history/transfer_history_screen.dart';
 import 'features/home/home_screen.dart';
 import 'features/transfers/batch_send_screen.dart';
 import 'features/transfers/inbox_screen.dart';
+import 'features/transfers/link_receive_screen.dart';
 import 'features/transfers/receive_screen.dart';
 import 'features/transfers/send_screen.dart';
 import 'features/verify_contact/verify_contact_screen.dart';
@@ -49,7 +50,11 @@ final routerProvider = Provider<GoRouter>((ref) {
           path == '/register' ||
           path == '/login/totp' ||
           path == '/verify-email' ||
-          path == '/password-reset';
+          path == '/password-reset' ||
+          // Link-mode receive is unauthenticated by design (ADR-0010).
+          // Signed-out users tapping a share link must be able to
+          // land on the receive screen without a login detour.
+          path.startsWith('/r/');
       if (!isSignedIn && !atAuthSurface) return '/login';
       if (isSignedIn && (path == '/login' || path == '/register')) return '/';
       return null;
@@ -105,6 +110,18 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/receive/:transferId',
         builder: (context, state) => ReceiveScreen(
           transferId: state.pathParameters['transferId'] ?? '',
+        ),
+      ),
+      // In-app link-mode receive (ADR-0010). Matches the web decrypt
+      // page's URL shape (`<origin>/r/<id>#<K_file>`) so a universal
+      // link opens either the app or the fallback web page depending
+      // on Android verification state. The K_file rides in the URL
+      // fragment — never transmitted to the server.
+      GoRoute(
+        path: '/r/:transferId',
+        builder: (context, state) => LinkReceiveScreen(
+          transferId: state.pathParameters['transferId'] ?? '',
+          fileKeyB64Url: state.uri.fragment,
         ),
       ),
       // M1.7 password-reset. Backend link is

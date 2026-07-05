@@ -4,6 +4,7 @@ import 'package:sodium_libs/sodium_libs.dart';
 import '../../api/api_client.dart';
 import '../../api/auth_api.dart';
 import '../../api/billing_api.dart';
+import '../../api/links_api.dart';
 import '../../api/transfers_api.dart';
 import '../../api/users_api.dart';
 import '../../core/config.dart';
@@ -48,12 +49,14 @@ class _AuthWiring {
     required this.authApi,
     required this.usersApi,
     required this.transfersApi,
+    required this.linksApi,
     required this.billingApi,
     required this.repository,
   });
   final AuthApi authApi;
   final UsersApi usersApi;
   final TransfersApi transfersApi;
+  final LinksApi linksApi;
   final BillingApi billingApi;
   final AuthRepository repository;
 }
@@ -72,6 +75,7 @@ final _authWiringProvider = FutureProvider<_AuthWiring>((ref) async {
   final authApi = AuthApi(client);
   final usersApi = UsersApi(client);
   final transfersApi = TransfersApi(client);
+  final linksApi = LinksApi(client);
   final billingApi = BillingApi(client);
   repo = AuthRepository(
     api: authApi,
@@ -85,6 +89,7 @@ final _authWiringProvider = FutureProvider<_AuthWiring>((ref) async {
     authApi: authApi,
     usersApi: usersApi,
     transfersApi: transfersApi,
+    linksApi: linksApi,
     billingApi: billingApi,
     repository: repo,
   );
@@ -145,6 +150,11 @@ final envelopeProvider = FutureProvider<Envelope>((ref) async {
   return Envelope(sodium);
 });
 
+final linksApiProvider = FutureProvider<LinksApi>((ref) async {
+  final wiring = await ref.watch(_authWiringProvider.future);
+  return wiring.linksApi;
+});
+
 final transferServiceProvider = FutureProvider<TransferService>((ref) async {
   final transfers = await ref.watch(transfersApiProvider.future);
   final wiring = await ref.watch(_authWiringProvider.future);
@@ -154,6 +164,7 @@ final transferServiceProvider = FutureProvider<TransferService>((ref) async {
   final storage = ref.watch(secureStorageProvider);
   return TransferService(
     transfers: transfers,
+    links: wiring.linksApi,
     users: wiring.usersApi,
     sealedBox: sealedBox,
     fileCrypto: fileCrypto,
