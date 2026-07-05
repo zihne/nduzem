@@ -24,6 +24,47 @@ class ApiException implements Exception {
   String toString() => 'ApiException(status=$statusCode, message=$message)';
 }
 
+/// Server said "you don't have enough storage budget to commit this
+/// upload." Raised specifically for HTTP 402 responses whose JSON body
+/// matches the server's `quota_exceeded` shape (see
+/// `services/quota.py::InsufficientQuota` + `api/v1/transfers.py`).
+///
+/// Subclass of [ApiException] so blanket `on ApiException` catches
+/// keep working; screens that want to render a "Buy more credit" CTA
+/// can type-check for this class and pull the specific numbers off
+/// the fields.
+///
+/// All three fields are in **MiB**, matching the server's contract.
+class QuotaExceededException extends ApiException {
+  QuotaExceededException({
+    required this.requiredMb,
+    required this.subRemainingMb,
+    required this.creditMb,
+  }) : super(
+          statusCode: 402,
+          message:
+              'Not enough storage budget for this send. '
+              'Needs $requiredMb MiB; you have $subRemainingMb MiB left on '
+              'your plan and $creditMb MiB in credits.',
+        );
+
+  /// Bytes the sender tried to commit, converted to MiB by the server.
+  final int requiredMb;
+
+  /// Remaining subscription allowance in MiB. Zero for free-tier users
+  /// who have used their monthly allotment (or never had one).
+  final int subRemainingMb;
+
+  /// Prepaid credit balance in MiB. Zero when the user has never
+  /// bought a credit pack.
+  final int creditMb;
+
+  @override
+  String toString() =>
+      'QuotaExceededException(required=${requiredMb}MiB, '
+      'sub_remaining=${subRemainingMb}MiB, credit=${creditMb}MiB)';
+}
+
 /// Network was unreachable — DNS failure, connection refused, TLS
 /// reset, timeout, etc. Subclass of [ApiException] so existing catch
 /// blocks pick up the friendly `.message` automatically; callers who
@@ -161,6 +202,18 @@ class ApiClient {
       return decoded;
     }
     final detail = decoded['detail'];
+    // 402 with the structured quota_exceeded shape → typed exception
+    // so send-screen error UX can render a "Buy more credit" CTA
+    // instead of a bare HTTP-code string.
+    if (response.statusCode == 402 &&
+        detail is Map<String, dynamic> &&
+        detail['error'] == 'quota_exceeded') {
+      throw QuotaExceededException(
+        requiredMb: (detail['required_mb'] as num? ?? 0).toInt(),
+        subRemainingMb: (detail['sub_remaining_mb'] as num? ?? 0).toInt(),
+        creditMb: (detail['credit_mb'] as num? ?? 0).toInt(),
+      );
+    }
     final message = detail is String
         ? detail
         : 'HTTP ${response.statusCode}';

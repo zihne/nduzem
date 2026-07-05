@@ -57,6 +57,12 @@ class _SendScreenState extends ConsumerState<SendScreen> {
   bool _busy = false;
   String? _error;
 
+  /// Set alongside [_error] when the server refused the commit for
+  /// lack of storage budget (HTTP 402 `quota_exceeded`). Non-null →
+  /// the error surface renders a "Buy more credit" CTA that routes
+  /// to the paywall.
+  QuotaExceededException? _quotaError;
+
   // True while the file_picker SAF flow is running — including the
   // plugin's post-selection copy of the SAF-picked file into app
   // cache, which can take real time on large files. Distinct from
@@ -91,6 +97,7 @@ class _SendScreenState extends ConsumerState<SendScreen> {
     setState(() {
       _picking = true;
       _error = null;
+      _quotaError = null;
     });
     try {
       final res = await FilePicker.platform.pickFiles(withData: false);
@@ -123,6 +130,7 @@ class _SendScreenState extends ConsumerState<SendScreen> {
           length: size,
         );
         _error = null;
+      _quotaError = null;
       });
     } finally {
       if (mounted) setState(() => _picking = false);
@@ -138,6 +146,7 @@ class _SendScreenState extends ConsumerState<SendScreen> {
     setState(() {
       _busy = true;
       _error = null;
+      _quotaError = null;
       _recipient = null;
       _recipientFp = null;
       _priorVerification = null;
@@ -204,6 +213,7 @@ class _SendScreenState extends ConsumerState<SendScreen> {
     setState(() {
       _busy = true;
       _error = null;
+      _quotaError = null;
       _uploadedBytes = 0;
       _totalBytes = null;
       _cancel = cancel;
@@ -305,6 +315,15 @@ class _SendScreenState extends ConsumerState<SendScreen> {
       );
       router.go('/');
       return;
+    } on QuotaExceededException catch (exc) {
+      // Special-case the quota-exhausted class: the error panel below
+      // switches to a "Buy more credit" CTA when `_quotaError` is set.
+      // Stay on-screen so the user can top up their balance and hit
+      // Send again without re-picking the file.
+      setState(() {
+        _error = exc.message;
+        _quotaError = exc;
+      });
     } on ApiException catch (exc) {
       // Stay on-screen so the user can retry without re-picking.
       setState(() => _error = exc.message);
@@ -414,6 +433,7 @@ class _SendScreenState extends ConsumerState<SendScreen> {
                   : (s) => setState(() {
                         _mode = s.first;
                         _error = null;
+      _quotaError = null;
                       }),
             ),
 
@@ -541,10 +561,15 @@ class _SendScreenState extends ConsumerState<SendScreen> {
 
             if (_error != null) ...[
               const SizedBox(height: 16),
-              Text(
-                _error!,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
+              if (_quotaError != null)
+                _QuotaExceededPanel(exception: _quotaError!)
+              else
+                Text(
+                  _error!,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                ),
             ],
           ],
         ),
@@ -850,6 +875,64 @@ class _FingerprintBanner extends StatelessWidget {
         'them to read their fingerprint to you out-of-band before you '
         'send anything sensitive. Otherwise send at your own risk.',
         style: TextStyle(color: scheme.onSurfaceVariant),
+      ),
+    );
+  }
+}
+
+/// Error surface for the 402 `quota_exceeded` case (ADR-0033 IAP
+/// paywall route + server `services/quota.py::InsufficientQuota`).
+///
+/// A plain "HTTP 402" line is not actionable — the user needs to
+/// know why the send stopped AND how to unstick themselves. So we
+/// render the numbers the server sent (required vs. available) plus
+/// a primary CTA that routes to `/paywall`. Retry stays implicit:
+/// the user comes back to the send screen with a topped-up balance
+/// and taps Send again — the file is still picked and encrypted.
+class _QuotaExceededPanel extends StatelessWidget {
+  const _QuotaExceededPanel({required this.exception});
+  final QuotaExceededException exception;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      color: scheme.errorContainer,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.wallet, color: scheme.onErrorContainer),
+                const SizedBox(width: 8),
+                Text(
+                  'Not enough storage budget',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: scheme.onErrorContainer,
+                      ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'This send needs ${exception.requiredMb} MiB. You have '
+              '${exception.subRemainingMb} MiB left on your plan and '
+              '${exception.creditMb} MiB in credits.',
+              style: TextStyle(color: scheme.onErrorContainer),
+            ),
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerRight,
+              child: FilledButton.icon(
+                onPressed: () => context.push('/paywall'),
+                icon: const Icon(Icons.add_shopping_cart),
+                label: const Text('Buy more credit'),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
