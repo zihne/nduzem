@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -15,6 +16,8 @@ import '../auth/auth_providers.dart';
 import '../history/transfer_history_entry.dart';
 import '../history/transfer_history_provider.dart';
 import '../verify_contact/verified_contacts_repo.dart';
+import 'picked_file.dart';
+import 'send_queue.dart';
 import 'transfer_service.dart';
 
 /// M2 send flow (spec §5.2). Three visible stages inside one screen:
@@ -40,7 +43,12 @@ class SendScreen extends ConsumerStatefulWidget {
 class _SendScreenState extends ConsumerState<SendScreen> {
   final _lookup = TextEditingController();
   final _linkPassword = TextEditingController();
-  _PickedFile? _file;
+  PickedFile? _file;
+
+  /// Populated when the user picked ≥ 2 files (ADR-0009 batch). Empty
+  /// on single-file picks; the existing single-file path continues to
+  /// use [_file]. Never overlaps with [_file] being non-null.
+  final List<PickedFile> _batchFiles = <PickedFile>[];
   UserLookup? _recipient;
   Fingerprint? _recipientFp;
   VerifiedContact? _priorVerification;
@@ -100,37 +108,59 @@ class _SendScreenState extends ConsumerState<SendScreen> {
       _quotaError = null;
     });
     try {
-      final res = await FilePicker.platform.pickFiles(withData: false);
+      final res = await FilePicker.platform.pickFiles(
+        withData: false,
+        allowMultiple: true,
+      );
       if (res == null || res.files.isEmpty) return;
-      final f = res.files.single;
-      if (f.path == null) {
-        if (mounted) {
-          setState(
-            () =>
-                _error = 'Could not read that file — no path was returned.',
-          );
+      final picked = <PickedFile>[];
+      for (final f in res.files) {
+        if (f.path == null) {
+          if (mounted) {
+            setState(
+              () => _error =
+                  'Could not read "${f.name}" — no path was returned.',
+            );
+          }
+          return;
         }
-        return;
-      }
-      final int size;
-      try {
-        size = await File(f.path!).length();
-      } on Object catch (exc) {
-        if (mounted) {
-          setState(() => _error = 'Could not stat that file: $exc');
+        final int size;
+        try {
+          size = await File(f.path!).length();
+        } on Object catch (exc) {
+          if (mounted) {
+            setState(
+              () => _error = 'Could not stat "${f.name}": $exc',
+            );
+          }
+          return;
         }
-        return;
+        picked.add(
+          PickedFile(
+            name: f.name,
+            mime: lookupMimeType(f.name),
+            path: f.path!,
+            length: size,
+          ),
+        );
       }
       if (!mounted) return;
       setState(() {
-        _file = _PickedFile(
-          name: f.name,
-          mime: lookupMimeType(f.name),
-          path: f.path!,
-          length: size,
-        );
+        if (picked.length == 1) {
+          _file = picked.single;
+          _batchFiles.clear();
+        } else {
+          _file = null;
+          _batchFiles
+            ..clear()
+            ..addAll(picked);
+          // Link mode is app-mode-only for batches (ADR-0009). If the
+          // user was on the link tab, snap back to app so the send
+          // button + recipient UI make sense.
+          if (_mode == SendMode.link) _mode = SendMode.app;
+        }
         _error = null;
-      _quotaError = null;
+        _quotaError = null;
       });
     } finally {
       if (mounted) setState(() => _picking = false);
@@ -196,6 +226,30 @@ class _SendScreenState extends ConsumerState<SendScreen> {
   }
 
   Future<void> _send() async {
+    // Batch branch (ADR-0009): ≥ 2 picked files → hand off to the
+    // queue controller and route to /send/batch. Batches are
+    // app-mode-only in v1 so a resolved recipient is required.
+    if (_batchFiles.isNotEmpty) {
+      final recipient = _recipient;
+      if (recipient == null) return;
+      final router = GoRouter.of(context);
+      final recipientLabel = _lookup.text.trim();
+      final files = List<PickedFile>.unmodifiable(_batchFiles);
+      // Fire-and-forget: the batch screen watches the queue state
+      // and doesn't need to await here. This send-screen just needs
+      // to navigate and clear its own busy flag.
+      final SendQueueController queue = ref.read(sendQueueProvider.notifier);
+      unawaited(
+        queue.start(
+          recipient: recipient,
+          recipientLabel: recipientLabel,
+          files: files,
+        ),
+      );
+      router.go('/send/batch');
+      return;
+    }
+
     final file = _file;
     if (file == null) return;
     // App mode requires a resolved recipient; link mode never uses one.
@@ -346,10 +400,13 @@ class _SendScreenState extends ConsumerState<SendScreen> {
   }
 
   /// Whether the Send button should be enabled given the current state.
-  /// - App mode: file picked AND recipient resolved.
-  /// - Link mode: file picked (password + max downloads are optional).
+  /// - Batch (≥ 2 files): recipient resolved (app-mode only per ADR-0009).
+  /// - Single-file app mode: file picked AND recipient resolved.
+  /// - Single-file link mode: file picked.
   bool get _sendEnabled {
-    if (_busy || _file == null) return false;
+    if (_busy) return false;
+    if (_batchFiles.isNotEmpty) return _recipient != null;
+    if (_file == null) return false;
     if (_mode == SendMode.app) return _recipient != null;
     return true;
   }
@@ -398,8 +455,10 @@ class _SendScreenState extends ConsumerState<SendScreen> {
                   : const Icon(Icons.attach_file),
               label: Text(
                 _picking
-                    ? 'Reading file…'
-                    : (_file == null ? 'Pick a file' : _file!.name),
+                    ? 'Reading file(s)…'
+                    : (_batchFiles.isNotEmpty
+                        ? '${_batchFiles.length} files picked'
+                        : (_file == null ? 'Pick file(s)' : _file!.name)),
               ),
             ),
             if (_file != null) ...[
@@ -410,10 +469,17 @@ class _SendScreenState extends ConsumerState<SendScreen> {
                 style: const TextStyle(fontStyle: FontStyle.italic),
               ),
             ],
+            if (_batchFiles.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              _BatchFilesSummary(files: _batchFiles),
+            ],
 
             const SizedBox(height: 24),
 
             // Stage 1b: mode selector — user vs shareable link (ADR-0005).
+            // Link mode is disabled for batches (ADR-0009): a batch of N
+            // link-mode sends produces N URLs which the completion
+            // surface doesn't handle yet.
             SegmentedButton<SendMode>(
               segments: const [
                 ButtonSegment(
@@ -428,14 +494,25 @@ class _SendScreenState extends ConsumerState<SendScreen> {
                 ),
               ],
               selected: {_mode},
-              onSelectionChanged: _busy
+              onSelectionChanged: (_busy || _batchFiles.isNotEmpty)
                   ? null
                   : (s) => setState(() {
                         _mode = s.first;
                         _error = null;
-      _quotaError = null;
+                        _quotaError = null;
                       }),
             ),
+            if (_batchFiles.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Link mode supports one file at a time in this version. '
+                'Batches always send to a user.',
+                style: TextStyle(
+                  fontStyle: FontStyle.italic,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
 
             const SizedBox(height: 24),
 
@@ -578,22 +655,6 @@ class _SendScreenState extends ConsumerState<SendScreen> {
   }
 }
 
-class _PickedFile {
-  const _PickedFile({
-    required this.name,
-    required this.mime,
-    required this.path,
-    required this.length,
-  });
-  final String name;
-  final String? mime;
-
-  /// Filesystem path of the plaintext file. The streaming send flow
-  /// reads chunks straight from here; the screen never loads the
-  /// bytes into memory.
-  final String path;
-  final int length;
-}
 
 /// Modal acknowledgement after a successful send. `barrierDismissible:
 /// false` at the caller ensures the user has to tap Done — otherwise a
@@ -933,6 +994,47 @@ class _QuotaExceededPanel extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Compact "N files, X.Y MiB total" summary + a tap-to-expand list of
+/// filenames. Shown under the pick button when the user picked ≥ 2
+/// files (ADR-0009 batch). Kept small so it doesn't push the recipient
+/// UI below the fold on smaller phones.
+class _BatchFilesSummary extends StatelessWidget {
+  const _BatchFilesSummary({required this.files});
+  final List<PickedFile> files;
+
+  @override
+  Widget build(BuildContext context) {
+    final total = files.fold<int>(0, (acc, f) => acc + f.length);
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      color: scheme.surfaceContainerHighest,
+      child: ExpansionTile(
+        title: Text(
+          '${files.length} files · ${_prettyBytes(total)} total',
+        ),
+        subtitle: const Text('Batch send — same recipient for all.'),
+        childrenPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 4,
+        ),
+        children: [
+          for (final f in files)
+            ListTile(
+              dense: true,
+              leading: const Icon(Icons.insert_drive_file_outlined),
+              title: Text(
+                f.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Text(_prettyBytes(f.length)),
+            ),
+        ],
       ),
     );
   }
