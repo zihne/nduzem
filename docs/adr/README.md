@@ -29,3 +29,4 @@ Status conventions:
 | [0006](0006-m4-streaming-receive.md) | M4 — client streaming receive to disk | Accepted |
 | [0007](0007-client-transfer-history.md) | Client — local transfer history | Accepted |
 | [0008](0008-saf-stream-save.md) | Native SAF stream-save for large-file receive (Android) | Accepted |
+| [0009](0009-multi-file-batch-send.md) | Multi-file batch send (app mode) | Accepted |
