@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../api/api_client.dart';
+import '../../api/links_api.dart';
 import '../../api/transfers_api.dart';
 import '../../api/users_api.dart';
 import '../../crypto/envelope.dart';
@@ -39,6 +40,7 @@ import '../../storage/secure_storage.dart';
 class TransferService {
   const TransferService({
     required TransfersApi transfers,
+    required LinksApi links,
     required UsersApi users,
     required SealedBox sealedBox,
     required FileCrypto fileCrypto,
@@ -46,6 +48,7 @@ class TransferService {
     required SecureStore storage,
     http.Client? httpClient,
   })  : _transfers = transfers,
+        _links = links,
         _users = users,
         _sealedBox = sealedBox,
         _fileCrypto = fileCrypto,
@@ -54,6 +57,7 @@ class TransferService {
         _http = httpClient;
 
   final TransfersApi _transfers;
+  final LinksApi _links;
   final UsersApi _users;
   final SealedBox _sealedBox;
   final FileCrypto _fileCrypto;
@@ -621,6 +625,133 @@ class TransferService {
   /// POST /ack — server enqueues the burn-after-read delete of the
   /// ciphertext object.
   Future<String> ack(String transferId) => _transfers.ack(transferId);
+
+  // --- RECEIVE (link mode, ADR-0010) ------------------------------------
+
+  /// Look up a link-mode transfer's public info. The [LinkReceiveScreen]
+  /// calls this first to decide whether to show a password prompt, an
+  /// "expired" panel, etc.
+  Future<LinkInfo> linkInfo(String transferId) => _links.info(transferId);
+
+  /// POST /v1/links/{id}/ack — link-mode counterpart to [ack]. Same
+  /// idempotent semantics as the authed path.
+  Future<String> linkAck(String transferId) => _links.ack(transferId);
+
+  /// Link-mode streaming receive. Mirrors [receive] step-for-step
+  /// except:
+  ///
+  ///  - Endpoint is `/v1/links/{id}/download` (no bearer token).
+  ///  - K_file arrives from the URL fragment as [fileKey], not from
+  ///    unsealing `wrapped_key`.
+  ///  - No sender identity to verify against — signature verification
+  ///    is skipped and [DecryptedTransfer.senderSignatureVerified] is
+  ///    reported as `false`.
+  ///
+  /// [password] is forwarded to the server for password-protected
+  /// links; ignored server-side when the link has no password. A
+  /// wrong / missing password comes back as an [ApiException] with
+  /// statusCode 401, which the screen surfaces as a retry-with-password
+  /// prompt.
+  Future<DecryptedTransfer> receiveLinkMode({
+    required String transferId,
+    required Uint8List fileKey,
+    String? password,
+    void Function(ReceivePhase phase, int done, int total)? onProgress,
+    CancelToken? cancel,
+  }) async {
+    // Wakelock across the whole receive — same rationale as the
+    // authed receive path.
+    try {
+      await WakelockPlus.enable();
+    } on Object {
+      // ignore
+    }
+    try {
+      // 1. Presigned URL + envelope. This is also the point at which
+      // the password gets checked and download_count increments.
+      final dl = await _links.download(transferId, password: password);
+
+      final tempDir = await getTemporaryDirectory();
+      final ciphertextFile = File(
+        '${tempDir.path}/opaqueshare-${FileCrypto.randomTempSlug()}.ct.tmp',
+      );
+
+      try {
+        // 2. Stream ciphertext to temp file + rolling SHA-256.
+        final downloadedLength = await _streamDownloadWithHash(
+          url: dl.downloadUrl,
+          destination: ciphertextFile,
+          expectedSha256Hex: dl.blobSha256Hex,
+          onProgress: onProgress,
+          cancel: cancel,
+        );
+
+        // 3. Sender-signature verification is intentionally skipped:
+        //    link mode has no on-platform sender identity, and the
+        //    server withholds `sender_signing_pub` on this endpoint by
+        //    design (ADR-0010). The screen renders "signature not
+        //    verified" so users understand the semantics.
+
+        // 4. Decrypt enc_header with the fragment-supplied file key.
+        final header = _envelope.openEncHeader(
+          encHeader: base64Decode(dl.encHeaderB64),
+          fileKey: fileKey,
+        );
+
+        // 5. Stream-decrypt ciphertext → plaintext.
+        cancel?.throwIfCancelled();
+        onProgress?.call(ReceivePhase.decrypting, 0, downloadedLength);
+        final dec = await _fileCrypto.decryptFileToTempFile(
+          ciphertextPath: ciphertextFile.path,
+          key: fileKey,
+          tempDir: tempDir,
+          throwIfCancelled: cancel?.throwIfCancelled,
+          onProgress: (done, total) =>
+              onProgress?.call(ReceivePhase.decrypting, done, total),
+        );
+
+        if (dec.plaintextLength != header.plaintextLength) {
+          try {
+            await File(dec.plaintextPath).delete();
+          } on Object {
+            // ignore
+          }
+          throw StateError(
+            'Decrypted plaintext length (${dec.plaintextLength}) does '
+            'not match the header claim (${header.plaintextLength}).',
+          );
+        }
+
+        return DecryptedTransfer(
+          transferId: transferId,
+          filename: _sanitiseFilename(header.filename, transferId),
+          mime: header.mime,
+          plaintextPath: dec.plaintextPath,
+          plaintextLength: dec.plaintextLength,
+          // Link mode has no signature to verify against — the
+          // JS decrypt page skips this same step (ADR-0010).
+          senderSignatureVerified: false,
+          senderIdentityPubB64: null,
+          senderId: null,
+          senderHandle: null,
+        );
+      } finally {
+        try {
+          if (await ciphertextFile.exists()) {
+            await ciphertextFile.delete();
+          }
+        } on Object {
+          // ignore
+        }
+      }
+    } finally {
+      try {
+        await WakelockPlus.disable();
+      } on Object {
+        // ignore
+      }
+    }
+  }
 
   // --- helpers ---------------------------------------------------------
 

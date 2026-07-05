@@ -24,6 +24,28 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!--
+                In-app link-mode receive (client ADR-0010). Universal-link
+                intent-filter claims https://<host>/r/* so tapping a share
+                link opens the app when installed and falls back to the
+                web decrypt page (server ADR-0035) otherwise.
+
+                OPERATOR TODO: replace `opaqueshare.com` with the real
+                deployment host, and deploy a matching
+                .well-known/assetlinks.json at that host containing this
+                app's release SHA-256 signing fingerprint. Without both,
+                android:autoVerify="true" fails silently and the OS
+                shows a chooser instead of routing straight to the app.
+                See ADR-0010 for the operator setup steps.
+            -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="https"/>
+                <data android:host="opaqueshare.com"/>
+                <data android:pathPrefix="/r/"/>
+            </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
