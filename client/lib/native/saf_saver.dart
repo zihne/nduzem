@@ -6,8 +6,9 @@ import 'package:flutter/services.dart';
 ///
 /// Two round-trips:
 ///   1. [pickSaveUri] — launches the platform's document-create UI
-///      and returns the resulting `content://` URI (or null on
-///      user-cancel).
+///      and returns a [SafPickedDestination] carrying both the raw
+///      `content://` URI (for the write) and a human-readable
+///      display name (for the UI + history).
 ///   2. [writeFileToUri] — copies the source file into the URI,
 ///      streaming end-to-end so peak memory stays around one 64 KiB
 ///      buffer regardless of file size.
@@ -37,9 +38,11 @@ abstract class SafSaver {
   factory SafSaver.methodChannelForTest() => const _MethodChannelSafSaver();
 
   /// Launch the system "save file" UI. `suggestedFilename` seeds the
-  /// filename field. Returns the chosen `content://` URI as a string,
-  /// or null if the user cancelled.
-  Future<String?> pickSaveUri({required String suggestedFilename});
+  /// filename field. Returns the chosen destination (URI + display
+  /// name) or null if the user cancelled.
+  Future<SafPickedDestination?> pickSaveUri({
+    required String suggestedFilename,
+  });
 
   /// Stream-copy [sourcePath] into [uri]. Both must be non-empty;
   /// throws [SafSaveWriteException] on I/O failure or if the source
@@ -49,6 +52,23 @@ abstract class SafSaver {
     required String sourcePath,
     required String uri,
   });
+}
+
+/// Result of [SafSaver.pickSaveUri].
+///
+/// The `uri` is the raw `content://` string — passed as-is to
+/// [SafSaver.writeFileToUri]. It's noisy (provider authority + tree
+/// segment + encoded document id) and NOT user-facing.
+///
+/// The `displayName` is the picker's own filename for the chosen
+/// destination (e.g. `report.pdf`, possibly with `-1` disambiguation
+/// if the picker resolved a collision). This is what the receive
+/// screen renders on the Saved card and what history logs — always
+/// prefer this over the URI for user-visible strings.
+class SafPickedDestination {
+  const SafPickedDestination({required this.uri, required this.displayName});
+  final String uri;
+  final String displayName;
 }
 
 /// Thrown when the platform doesn't support native SAF save and the
@@ -80,18 +100,20 @@ class _MethodChannelSafSaver extends SafSaver {
       MethodChannel('com.opaqueshare.opaqueshare/saf_stream_save');
 
   @override
-  Future<String?> pickSaveUri({required String suggestedFilename}) async {
+  Future<SafPickedDestination?> pickSaveUri({
+    required String suggestedFilename,
+  }) async {
     try {
-      final result = await _channel.invokeMethod<String>(
+      final result = await _channel.invokeMethod<Map<Object?, Object?>>(
         'pickSaveUri',
         <String, dynamic>{'suggestedFilename': suggestedFilename},
       );
-      return result;
+      if (result == null) return null;
+      final uri = result['uri'] as String?;
+      if (uri == null || uri.isEmpty) return null;
+      final displayName = (result['displayName'] as String?) ?? suggestedFilename;
+      return SafPickedDestination(uri: uri, displayName: displayName);
     } on PlatformException catch (exc) {
-      // Fold "the user closed the picker" and "the launcher failed"
-      // both to null — the receive screen already knows to route to
-      // the fallback in that case, and there's no meaningful "why"
-      // to expose here.
       throw SafSaveWriteException(
         code: exc.code,
         message: exc.message ?? 'pickSaveUri failed',
@@ -122,7 +144,9 @@ class _UnsupportedSafSaver extends SafSaver {
   const _UnsupportedSafSaver();
 
   @override
-  Future<String?> pickSaveUri({required String suggestedFilename}) async =>
+  Future<SafPickedDestination?> pickSaveUri({
+    required String suggestedFilename,
+  }) async =>
       null;
 
   @override

@@ -3,6 +3,9 @@ package com.opaqueshare.opaqueshare
 import android.app.Activity
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.provider.DocumentsContract
+import android.provider.OpenableColumns
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -47,6 +50,15 @@ class SafStreamSavePlugin(private val activity: Activity) :
         // startActivityForResult slot.
         const val REQUEST_PICK_SAVE_URI = 0x517A
         private const val COPY_BUFFER_BYTES = 64 * 1024
+        // ExternalStorageDocumentsProvider tree URI for the primary
+        // volume's Downloads folder. This is the canonical "start
+        // here" hint for the CREATE_DOCUMENT picker so the user
+        // lands on Downloads by default instead of the picker's
+        // sticky last location. Individual providers may override
+        // (e.g. a device with a customised Files app) — that's
+        // fine, this is a hint.
+        private const val DOWNLOADS_TREE_URI =
+            "content://com.android.externalstorage.documents/tree/primary%3ADownload"
     }
 
     private var channel: MethodChannel? = null
@@ -95,24 +107,59 @@ class SafStreamSavePlugin(private val activity: Activity) :
             return true
         }
         val uri = data?.data
-        if (uri != null) {
-            // Persist a write permission grant so subsequent
-            // openOutputStream calls on the same URI succeed after
-            // process death. Best-effort — some providers ignore
-            // this.
-            try {
-                activity.contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-                )
-            } catch (_: SecurityException) {
-                // Provider refused the persistable grant. The
-                // immediate write still works via the ephemeral
-                // grant tied to the intent result.
-            }
+        if (uri == null) {
+            result.success(null)
+            return true
         }
-        result.success(uri?.toString())
+        // Persist a write permission grant so subsequent
+        // openOutputStream calls on the same URI succeed after
+        // process death. Best-effort — some providers ignore
+        // this.
+        try {
+            activity.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        } catch (_: SecurityException) {
+            // Provider refused the persistable grant. The
+            // immediate write still works via the ephemeral
+            // grant tied to the intent result.
+        }
+        // Look up the human-readable filename via OpenableColumns
+        // (every DocumentsProvider is required to surface it). Falls
+        // back to the URI's last-path segment if the query returns
+        // nothing (very old provider, or we somehow raced onto a URI
+        // that's already gone).
+        result.success(
+            mapOf(
+                "uri" to uri.toString(),
+                "displayName" to (queryDisplayName(uri)
+                    ?: uri.lastPathSegment
+                    ?: "file"),
+            )
+        )
         return true
+    }
+
+    private fun queryDisplayName(uri: Uri): String? {
+        return try {
+            activity.contentResolver.query(
+                uri,
+                arrayOf(OpenableColumns.DISPLAY_NAME),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val i = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (i >= 0 && !cursor.isNull(i)) cursor.getString(i) else null
+                } else {
+                    null
+                }
+            }
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
@@ -138,6 +185,18 @@ class SafStreamSavePlugin(private val activity: Activity) :
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "application/octet-stream"
             putExtra(Intent.EXTRA_TITLE, suggestedFilename)
+            // API 26+ honors EXTRA_INITIAL_URI as a picker hint. We
+            // point it at the system Downloads folder so the user
+            // lands on the same location small-file saves usually
+            // start at, instead of the SAF picker's stateful "wherever
+            // you were last." Providers may ignore this — it's a
+            // hint, not a mandate.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                putExtra(
+                    DocumentsContract.EXTRA_INITIAL_URI,
+                    Uri.parse(DOWNLOADS_TREE_URI),
+                )
+            }
         }
         pendingPickResult = result
         try {
