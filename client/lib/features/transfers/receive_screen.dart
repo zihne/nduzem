@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../api/api_client.dart';
+import '../../native/saf_saver.dart';
 import '../auth/auth_providers.dart';
 import '../history/transfer_history_entry.dart';
 import '../history/transfer_history_provider.dart';
@@ -149,13 +150,14 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
     });
     String? savedPath;
     try {
-      // Big files skip SAF entirely and stream-copy the plaintext
-      // temp into an app-external directory. `readAsBytes` +
-      // `saveFile(bytes:)` OOMs above ~200 MiB on mid-range Android
-      // (documented in ADR-0006); the copy path uses `File.copy`
-      // which streams internally, ~zero heap pressure.
+      // Big files on Android go through the native SAF stream-save
+      // (ADR-0008): user picks a `content://` URI, we stream-copy the
+      // plaintext temp into it via ContentResolver on the platform
+      // thread — peak heap ≈ 64 KiB. On iOS the plugin declines
+      // (pickSaveUri → null), so we route to `_saveToExternalStorage`
+      // which drops the file into the app-documents dir.
       if (decrypted.plaintextLength > _saveBytesWarnThreshold) {
-        savedPath = await _saveToExternalStorage(decrypted);
+        savedPath = await _saveLargeFile(decrypted);
       } else {
         // Small-file fast path: `file_picker.saveFile(bytes:)` uses
         // SAF on Android and iOS document picker on iOS. Peak
@@ -193,16 +195,67 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
     await _ack(autoTriggered: true);
   }
 
-  /// Fallback save path for files too big to fit in `saveFile(bytes:)`.
-  /// Copies the plaintext temp file (streaming, via `File.copy`) into
-  /// the app-external files directory under an `OpaqueShare/` subfolder,
-  /// then deletes the source temp. Peak memory ≈ Dart I/O buffers.
+  /// Primary large-file save path (ADR-0008). Launches the native
+  /// SAF picker via [SafSaver.pickSaveUri], then stream-copies the
+  /// plaintext temp file into the chosen `content://` URI via
+  /// [SafSaver.writeFileToUri]. Peak heap ≈ one 64 KiB buffer on the
+  /// Kotlin side — safe for multi-GB files.
+  ///
+  /// Falls back to [_saveToExternalStorage] when SAF is unavailable
+  /// (iOS today) or when the picker fails to launch. User-cancel from
+  /// the picker returns null without an error — the user just backs
+  /// out, plaintext temp file stays put for a retry.
+  Future<String?> _saveLargeFile(DecryptedTransfer decrypted) async {
+    final saf = ref.read(safSaverProvider);
+    String? uri;
+    try {
+      uri = await saf.pickSaveUri(suggestedFilename: decrypted.filename);
+    } on SafSaveWriteException catch (exc) {
+      // Picker launch failed. Fall through to the fallback path — the
+      // user still gets their file even if the fancy picker didn't
+      // come up.
+      setState(() => _error = 'Picker failed: ${exc.message}');
+      return _saveToExternalStorage(decrypted);
+    }
+    if (uri == null) {
+      // Two cases lead here:
+      //  1. Android user cancelled the picker → they're consciously
+      //     backing out; leave the plaintext temp for a retry.
+      //  2. Non-Android platform (iOS today) → route to the app-docs
+      //     fallback so the file still lands somewhere useful.
+      if (!Platform.isAndroid) {
+        return _saveToExternalStorage(decrypted);
+      }
+      return null;
+    }
+    try {
+      await saf.writeFileToUri(
+        sourcePath: decrypted.plaintextPath,
+        uri: uri,
+      );
+    } on SafSaveWriteException catch (exc) {
+      // The SAF write started but didn't complete. Fall back rather
+      // than leaving the user with nothing — losing the file to a
+      // provider bug is worse than an unexpected save location.
+      setState(() => _error = 'SAF save failed: ${exc.message}');
+      return _saveToExternalStorage(decrypted);
+    }
+    // Success. Drop the plaintext temp file to reclaim cache space —
+    // the fallback path does the same after its File.copy.
+    await _deleteIfExists(decrypted.plaintextPath);
+    return uri;
+  }
+
+  /// Fallback save path when SAF isn't available (iOS today) or the
+  /// SAF write failed for a provider-side reason. Copies the plaintext
+  /// temp file (streaming, via `File.copy`) into the app-external
+  /// files directory under an `OpaqueShare/` subfolder, then deletes
+  /// the source temp. Peak memory ≈ Dart I/O buffers.
   ///
   /// The destination path is user-visible under
-  /// `Android/data/<pkg>/files/OpaqueShare/` in most file managers.
-  /// Not as slick as SAF but reliable for multi-GB receives. A proper
-  /// SAF stream-write via platform channel is the follow-up (ADR-0006
-  /// "Open follow-ups").
+  /// `Android/data/<pkg>/files/OpaqueShare/` (Android) or
+  /// `On My iPhone > OpaqueShare` (iOS Files app). Not as slick as
+  /// SAF but reliable for multi-GB receives.
   Future<String?> _saveToExternalStorage(DecryptedTransfer decrypted) async {
     final Directory? baseDir;
     try {
@@ -362,7 +415,12 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
                 decrypted: _decrypted!,
                 savedPath: _savedPath,
               ),
-              if (_decrypted!.plaintextLength > _saveBytesWarnThreshold &&
+              // Large-file banner only fires on iOS now — Android
+              // routes through the native SAF stream-save (ADR-0008)
+              // and gets the same "pick where to save" UX regardless
+              // of file size.
+              if (!Platform.isAndroid &&
+                  _decrypted!.plaintextLength > _saveBytesWarnThreshold &&
                   _savedPath == null) ...[
                 const SizedBox(height: 12),
                 _LargeFileWarning(

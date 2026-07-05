@@ -11,6 +11,7 @@ import '../../crypto/envelope.dart';
 import '../../crypto/file_crypto.dart';
 import '../../crypto/keys.dart';
 import '../../crypto/sealed_box.dart';
+import '../../native/saf_saver.dart';
 import '../../storage/secure_storage.dart';
 import '../billing/iap_purchase_service.dart';
 import '../transfers/transfer_service.dart';
@@ -24,6 +25,11 @@ import 'auth_repository.dart';
 final appConfigProvider = Provider<AppConfig>((_) => AppConfig.fromEnv());
 
 final secureStorageProvider = Provider<SecureStore>((_) => SecureStore());
+
+/// Native SAF stream-save (ADR-0008). Android: real method-channel
+/// impl; other platforms: stub that declines so the receive screen
+/// routes to the ADR-0006 fallback.
+final safSaverProvider = Provider<SafSaver>((_) => SafSaver.platformDefault());
 
 /// Sodium instance is expensive to initialise (native library load); build
 /// once, share across the app.
