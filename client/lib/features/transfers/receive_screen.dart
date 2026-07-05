@@ -205,11 +205,18 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
   /// (iOS today) or when the picker fails to launch. User-cancel from
   /// the picker returns null without an error — the user just backs
   /// out, plaintext temp file stays put for a retry.
+  ///
+  /// Returns the human-readable display name the picker resolved,
+  /// NOT the raw `content://` URI — the URI is noisy
+  /// (`content://com.android.providers.downloads.documents/…`) and
+  /// confusing for users. The URI stays internal to the write step.
   Future<String?> _saveLargeFile(DecryptedTransfer decrypted) async {
     final saf = ref.read(safSaverProvider);
-    String? uri;
+    SafPickedDestination? destination;
     try {
-      uri = await saf.pickSaveUri(suggestedFilename: decrypted.filename);
+      destination = await saf.pickSaveUri(
+        suggestedFilename: decrypted.filename,
+      );
     } on SafSaveWriteException catch (exc) {
       // Picker launch failed. Fall through to the fallback path — the
       // user still gets their file even if the fancy picker didn't
@@ -217,7 +224,7 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
       setState(() => _error = 'Picker failed: ${exc.message}');
       return _saveToExternalStorage(decrypted);
     }
-    if (uri == null) {
+    if (destination == null) {
       // Two cases lead here:
       //  1. Android user cancelled the picker → they're consciously
       //     backing out; leave the plaintext temp for a retry.
@@ -231,7 +238,7 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
     try {
       await saf.writeFileToUri(
         sourcePath: decrypted.plaintextPath,
-        uri: uri,
+        uri: destination.uri,
       );
     } on SafSaveWriteException catch (exc) {
       // The SAF write started but didn't complete. Fall back rather
@@ -243,7 +250,7 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
     // Success. Drop the plaintext temp file to reclaim cache space —
     // the fallback path does the same after its File.copy.
     await _deleteIfExists(decrypted.plaintextPath);
-    return uri;
+    return destination.displayName;
   }
 
   /// Fallback save path when SAF isn't available (iOS today) or the

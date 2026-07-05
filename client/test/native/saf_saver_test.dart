@@ -31,23 +31,55 @@ void main() {
   });
 
   group('MethodChannel SafSaver — pickSaveUri', () {
-    test('forwards suggestedFilename and returns the picked URI', () async {
-      String? capturedFilename;
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(channel, (call) async {
-        expect(call.method, 'pickSaveUri');
-        capturedFilename =
-            (call.arguments as Map<Object?, Object?>?)?['suggestedFilename']
-                as String?;
-        return 'content://com.android.docs/tree/abc%2Freport.pdf';
-      });
+    test(
+      'forwards suggestedFilename and returns URI + display name',
+      () async {
+        String? capturedFilename;
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, (call) async {
+          expect(call.method, 'pickSaveUri');
+          capturedFilename =
+              (call.arguments as Map<Object?, Object?>?)?['suggestedFilename']
+                  as String?;
+          return <String, String>{
+            'uri': 'content://com.android.docs/tree/abc%2Freport.pdf',
+            'displayName': 'report.pdf',
+          };
+        });
 
-      final saf = SafSaver.methodChannelForTest();
-      final result =
-          await saf.pickSaveUri(suggestedFilename: 'report.pdf');
-      expect(capturedFilename, 'report.pdf');
-      expect(result, startsWith('content://'));
-    });
+        final saf = SafSaver.methodChannelForTest();
+        final result = await saf.pickSaveUri(
+          suggestedFilename: 'report.pdf',
+        );
+        expect(capturedFilename, 'report.pdf');
+        expect(result, isNotNull);
+        expect(result!.uri, startsWith('content://'));
+        expect(result.displayName, 'report.pdf');
+      },
+    );
+
+    test(
+      'falls back to suggestedFilename when Kotlin returns no displayName',
+      () async {
+        // Older DocumentsProviders can return a URI without a
+        // queryable DISPLAY_NAME row. Rather than surface the raw
+        // URI in the UI, [SafSaver] falls back to the same string
+        // the user typed in the picker's title field.
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, (call) async {
+          return <String, String?>{
+            'uri': 'content://legacy/doc/xyz',
+            'displayName': null,
+          };
+        });
+
+        final saf = SafSaver.methodChannelForTest();
+        final result = await saf.pickSaveUri(
+          suggestedFilename: 'the-name.zip',
+        );
+        expect(result?.displayName, 'the-name.zip');
+      },
+    );
 
     test('returns null when the user cancelled the picker', () async {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
