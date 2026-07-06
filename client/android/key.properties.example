@@ -1,0 +1,28 @@
+# Copy this file to `key.properties` (same directory) and fill in
+# the real values. `key.properties` is gitignored — do NOT commit
+# the populated file.
+#
+# The keystore itself (the `.jks` file `storeFile` points at) MUST
+# live outside the repo — anywhere gitignored is fine, but a
+# dedicated ~/keystores/ folder or a CI secret mount is the norm.
+#
+# Losing the keystore is recoverable via Play App Signing (Google
+# retains the app signing key; you re-enrol with a new upload key)
+# — but it's a real hassle and requires opening a support ticket.
+# Back up the keystore + these credentials somewhere durable.
+#
+# Generate a keystore (one-time) with:
+#
+#   keytool -genkey -v \
+#     -keystore ~/opaqueshare-upload.jks \
+#     -keyalg RSA -keysize 2048 -validity 10000 \
+#     -alias upload
+#
+# The prompts for the tool populate the `storePassword` +
+# `keyPassword` fields below. If you're only ever going to have
+# one key in this store, set them to the same value.
+
+storePassword=CHANGE_ME
+keyPassword=CHANGE_ME
+keyAlias=upload
+storeFile=/absolute/path/to/opaqueshare-upload.jks
