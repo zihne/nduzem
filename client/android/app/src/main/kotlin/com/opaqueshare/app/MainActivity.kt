@@ -1,4 +1,4 @@
-package com.opaqueshare.opaqueshare
+package com.opaqueshare.app
 
 import android.content.Intent
 import io.flutter.embedding.android.FlutterActivity
