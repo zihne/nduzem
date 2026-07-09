@@ -10,7 +10,7 @@ import 'package:opaqueshare/native/saf_saver.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  const channel = MethodChannel('com.opaqueshare.opaqueshare/saf_stream_save');
+  const channel = MethodChannel('com.opaqueshare.app/saf_stream_save');
 
   tearDown(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
