@@ -331,8 +331,10 @@ class _SendScreenState extends ConsumerState<SendScreen> {
       // mode (app-mode confirms the recipient; link-mode surfaces the
       // shareable URL — ADR-0005).
       if (result.mode == SendMode.link) {
+        // Share URLs point at the marketing / bare-domain host, NOT
+        // the api. subdomain — see AppConfig doc comment.
         final shareUrl = _buildLinkUrl(
-          appConfig.apiBaseUrl,
+          appConfig.shareUrlBase,
           result.transferId,
           result.linkFileKey!,
         );
@@ -412,20 +414,27 @@ class _SendScreenState extends ConsumerState<SendScreen> {
   }
 
   /// Assemble `<origin>/r/<transferId>#<K_file>` — the URL the web
-  /// decrypt page (ADR-0035) expects. K_file is base64url without
-  /// padding to match the JS side's `atob` restoration logic. The
-  /// fragment is client-side only; the server never sees K_file.
+  /// decrypt page (ADR-0035) expects. `origin` is the marketing /
+  /// bare-domain host (`AppConfig.shareUrlBase`), NOT the `api.`
+  /// subdomain — Android universal-link verification and
+  /// user-facing URL hygiene both require the bare host. See
+  /// AppConfig doc comment for the full reasoning.
+  ///
+  /// K_file is base64url without padding to match the JS side's
+  /// `atob` restoration logic. The fragment is client-side only;
+  /// the server never sees K_file.
   String _buildLinkUrl(
-    Uri apiBaseUrl,
+    Uri shareUrlBase,
     String transferId,
     List<int> fileKey,
   ) {
     final k = base64UrlEncode(fileKey).replaceAll('=', '');
-    // apiBaseUrl may or may not end in `/` — use `resolve` to compose.
-    final base = apiBaseUrl.replace(
-      path: apiBaseUrl.path.endsWith('/')
-          ? '${apiBaseUrl.path}r/$transferId'
-          : '${apiBaseUrl.path}/r/$transferId',
+    // shareUrlBase may or may not end in `/` — normalise before
+    // appending the /r/<id> path.
+    final base = shareUrlBase.replace(
+      path: shareUrlBase.path.endsWith('/')
+          ? '${shareUrlBase.path}r/$transferId'
+          : '${shareUrlBase.path}/r/$transferId',
     );
     return '$base#$k';
   }
