@@ -180,12 +180,26 @@ class TransferService {
       // 5. Sign blob_sha256 with our Ed25519 signing_priv. Wire shape
       // is identical across modes; the web decrypt page ignores the
       // signature (ADR-0035) but a future authenticated-link feature
-      // could verify it.
-      final signingPriv = await _storage.readBytes(SecureStore.kSigningPrivate);
+      // could verify it. ADR-0011: signing_priv lives in a userId-
+      // scoped slot so a second account on this device doesn't clobber
+      // it.
+      final activeUserId = await _storage.read(SecureStore.kUserId);
+      if (activeUserId == null) {
+        throw StateError(
+          'No signed-in user on this device. Sign in before sending.',
+        );
+      }
+      final signingPriv = await _storage.readBytes(
+        SecureStore.signingPrivateKeyFor(activeUserId),
+      );
       if (signingPriv == null) {
         throw StateError(
-          'No signing private key on device. Register or sign in from the '
-          'device where this account was created.',
+          "This device doesn't have the signing key for this account. "
+          'The account was likely created on another device, or an older '
+          'app version overwrote the key when a second account was '
+          'registered here. Register a fresh account on this device to '
+          'send from here, or sign in from the device where this account '
+          'was originally registered.',
         );
       }
       final signature = _envelope.signBlobSha256(
@@ -447,15 +461,28 @@ class TransferService {
         senderSignatureVerified = true;
       }
 
-      // 4. Unseal wrapped_key with our identity keypair.
-      final identityPriv =
-          await _storage.readBytes(SecureStore.kIdentityPrivate);
-      final identityPub =
-          await _storage.readBytes(SecureStore.kIdentityPublic);
+      // 4. Unseal wrapped_key with our identity keypair. ADR-0011: the
+      // keypair lives in userId-scoped slots so this device can host
+      // more than one account without stepping on itself.
+      final activeUserId = await _storage.read(SecureStore.kUserId);
+      if (activeUserId == null) {
+        throw StateError(
+          'No signed-in user on this device. Sign in before receiving.',
+        );
+      }
+      final identityPriv = await _storage.readBytes(
+        SecureStore.identityPrivateKeyFor(activeUserId),
+      );
+      final identityPub = await _storage.readBytes(
+        SecureStore.identityPublicKeyFor(activeUserId),
+      );
       if (identityPriv == null || identityPub == null) {
         throw StateError(
-          'No identity keypair on device. Sign in from the device '
-          'where this account was created to decrypt received '
+          "This device doesn't have the identity keypair for this "
+          'account. The account was likely created on another device, or '
+          'an older app version overwrote the keys when a second account '
+          'was registered here. Sign in from the device where this '
+          'account was originally registered to decrypt received '
           'transfers.',
         );
       }

@@ -42,6 +42,10 @@ class AuthRepository implements TokenSource {
   /// Load whatever's in secure storage into memory. Called from
   /// [`AuthNotifier.build`] at app start.
   Future<AuthSession?> restoreSession() async {
+    // ADR-0011: fold any pre-scoped single-slot keypair into the
+    // per-user layout before anything reads keys. Idempotent — a no-op
+    // once the device is on the scoped layout.
+    await _storage.migrateLegacyKeypairIfNeeded();
     final userId = await _storage.read(SecureStore.kUserId);
     final access = await _storage.read(SecureStore.kAccessToken);
     final refresh = await _storage.read(SecureStore.kRefreshToken);
@@ -115,8 +119,10 @@ class AuthRepository implements TokenSource {
     );
 
     // Persist BEFORE flipping the in-memory cache — a failed write should
-    // leave the app in the pre-register state so retry works.
-    await _persistKeypair(pair);
+    // leave the app in the pre-register state so retry works. ADR-0011:
+    // keypair slots are scoped to the newly-issued userId, so a second
+    // account registered on this device doesn't overwrite the first.
+    await _persistKeypair(userId: res.userId, pair: pair);
     await _persistTokens(
       userId: res.userId,
       access: res.access,
@@ -287,10 +293,11 @@ class AuthRepository implements TokenSource {
   // --- sign out ------------------------------------------------------------
 
   /// Session-level sign-out: clears tokens + the MFA-enabled flag so the
-  /// next login has to re-authenticate. **Preserves** the private keys,
-  /// user id, and fingerprint so a subsequent login by the same user on
-  /// this device can still decrypt K_files sealed under those keys.
-  /// See [SecureStore.purgeSession] for the rationale.
+  /// next login has to re-authenticate. **Preserves** the per-user
+  /// keypair slots (ADR-0011), the user id, and fingerprint so a
+  /// subsequent login by the same user on this device can still decrypt
+  /// K_files sealed under those keys. Other users' keypair slots are
+  /// untouched. See [SecureStore.purgeSession] for the rationale.
   Future<void> signOut() async {
     _accessCache = null;
     _refreshCache = null;
@@ -324,11 +331,28 @@ class AuthRepository implements TokenSource {
 
   // --- internals -----------------------------------------------------------
 
-  Future<void> _persistKeypair(IdentityKeypair pair) async {
-    await _storage.writeBytes(SecureStore.kIdentityPrivate, pair.identityPrivate);
-    await _storage.writeBytes(SecureStore.kIdentityPublic, pair.identityPublic);
-    await _storage.writeBytes(SecureStore.kSigningPrivate, pair.signingPrivate);
-    await _storage.writeBytes(SecureStore.kSigningPublic, pair.signingPublic);
+  /// ADR-0011: keypair material is namespaced by `userId` so two
+  /// accounts registered on the same device don't clobber each other.
+  Future<void> _persistKeypair({
+    required String userId,
+    required IdentityKeypair pair,
+  }) async {
+    await _storage.writeBytes(
+      SecureStore.identityPrivateKeyFor(userId),
+      pair.identityPrivate,
+    );
+    await _storage.writeBytes(
+      SecureStore.identityPublicKeyFor(userId),
+      pair.identityPublic,
+    );
+    await _storage.writeBytes(
+      SecureStore.signingPrivateKeyFor(userId),
+      pair.signingPrivate,
+    );
+    await _storage.writeBytes(
+      SecureStore.signingPublicKeyFor(userId),
+      pair.signingPublic,
+    );
   }
 
   Future<void> _persistTokens({

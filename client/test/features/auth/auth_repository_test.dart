@@ -49,6 +49,7 @@ void main() {
     when(() => store.delete(any())).thenAnswer((_) async {});
     when(() => store.purgeSession()).thenAnswer((_) async {});
     when(() => store.purgeAll()).thenAnswer((_) async {});
+    when(() => store.migrateLegacyKeypairIfNeeded()).thenAnswer((_) async {});
     when(() => store.read(any())).thenAnswer((_) async => null);
   });
 
@@ -97,10 +98,20 @@ void main() {
       expect(session.fingerprint.length, 25); // canonical form
       expect(session.mfaEnabled, isFalse); // fresh account
 
-      verify(() => store.writeBytes(SecureStore.kIdentityPrivate, identityPriv))
-          .called(1);
-      verify(() => store.writeBytes(SecureStore.kSigningPrivate, signingPriv))
-          .called(1);
+      // ADR-0011: keypair slots are scoped to the newly-issued userId so
+      // two accounts on the same device don't collide.
+      verify(
+        () => store.writeBytes(
+          SecureStore.identityPrivateKeyFor('u1'),
+          identityPriv,
+        ),
+      ).called(1);
+      verify(
+        () => store.writeBytes(
+          SecureStore.signingPrivateKeyFor('u1'),
+          signingPriv,
+        ),
+      ).called(1);
       verify(() => store.write(SecureStore.kUserId, 'u1')).called(1);
       verify(() => store.write(SecureStore.kAccessToken, 'A')).called(1);
       verify(() => store.write(SecureStore.kRefreshToken, 'R')).called(1);

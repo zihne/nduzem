@@ -31,3 +31,4 @@ Status conventions:
 | [0008](0008-saf-stream-save.md) | Native SAF stream-save for large-file receive (Android) | Accepted |
 | [0009](0009-multi-file-batch-send.md) | Multi-file batch send (app mode) | Accepted |
 | [0010](0010-in-app-link-decrypt.md) | In-app link-mode receive (deep-link `/r/<id>#<K>`) | Accepted |
+| [0011](0011-per-user-secure-storage.md) | Per-user secure_storage for identity keypairs | Accepted |
