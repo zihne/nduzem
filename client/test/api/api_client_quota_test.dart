@@ -16,7 +16,10 @@ class _NoToken implements TokenSource {
 }
 
 ApiClient _client(MockClient mock) => ApiClient(
-      config: AppConfig(apiBaseUrl: Uri.parse('http://test/')),
+      config: AppConfig(
+        apiBaseUrl: Uri.parse('http://test/'),
+        shareUrlBase: Uri.parse('http://test/'),
+      ),
       tokenSource: _NoToken(),
       httpClient: mock,
     );

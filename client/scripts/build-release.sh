@@ -71,7 +71,7 @@ if [[ -z "$API_BASE" ]]; then
     fail "OPAQUESHARE_API_BASE is required.
 
 Usage:
-  scripts/build-release.sh https://api.opaqueshare.com
+  scripts/build-release.sh https://api.opaqueshare.com [https://opaqueshare.com]
 
 Or:
   export OPAQUESHARE_API_BASE=https://api.opaqueshare.com
@@ -82,6 +82,27 @@ case "$API_BASE" in
     https://*) ;;
     http://*)  warn "API base is http:// — release builds should use https:// in production." ;;
     *)         fail "API base must be a full URL (starts with http:// or https://). Got: $API_BASE" ;;
+esac
+
+# Share URL base — where link-mode share URLs point. Falls back to
+# stripping `api.` from the API host (client's AppConfig does the same
+# derivation, so passing this arg explicitly is optional when the
+# `api.<host>` / `<host>` convention holds).
+SHARE_URL_BASE="${2:-${OPAQUESHARE_SHARE_URL_BASE:-}}"
+if [[ -z "$SHARE_URL_BASE" ]]; then
+    # Derive by stripping a leading `api.` from the URL's host.
+    # Uses bash param expansion; matches the client's Uri manipulation.
+    SHARE_URL_BASE="${API_BASE/\/\/api./\/\/}"
+    if [[ "$SHARE_URL_BASE" == "$API_BASE" ]]; then
+        warn "Could not derive a share URL base from API base — no 'api.' prefix.
+Falling back to the API base as the share host. Set
+OPAQUESHARE_SHARE_URL_BASE explicitly if this is wrong for your setup."
+    fi
+fi
+
+case "$SHARE_URL_BASE" in
+    https://*|http://*) ;;
+    *) fail "Share URL base must be a full URL. Got: $SHARE_URL_BASE" ;;
 esac
 
 # --- work from the client-repo root ----------------------------------
@@ -144,9 +165,12 @@ fi
 ok "tests pass"
 
 # --- 7. Build AAB ----------------------------------------------------
-say "Building release AAB against API base: $API_BASE"
+say "Building release AAB with:"
+say "  API base:   $API_BASE"
+say "  Share URL:  $SHARE_URL_BASE"
 flutter build appbundle --release \
-    --dart-define=OPAQUESHARE_API_BASE="$API_BASE"
+    --dart-define=OPAQUESHARE_API_BASE="$API_BASE" \
+    --dart-define=OPAQUESHARE_SHARE_URL_BASE="$SHARE_URL_BASE"
 
 AAB="$CLIENT_ROOT/build/app/outputs/bundle/release/app-release.aab"
 if [[ ! -f "$AAB" ]]; then
@@ -249,6 +273,7 @@ printf '  Path:         %s\n' "$AAB"
 printf '  Size:         %s\n' "$AAB_SIZE"
 printf '  Version:      %s (build %s)\n' "$VERSION_NAME" "$VERSION_CODE"
 printf '  API base:     %s\n' "$API_BASE"
+printf '  Share URL:    %s\n' "$SHARE_URL_BASE"
 [[ -n "${CERT_OWNER:-}" ]]  && printf '  Signed by:    %s\n' "$CERT_OWNER"
 [[ -n "${CERT_SHA256:-}" ]] && printf '  SHA-256:      %s\n' "$CERT_SHA256"
 echo
