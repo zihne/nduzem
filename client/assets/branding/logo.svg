@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="OpaqueShare">
+  <!--
+    "Frosted O" mark. A ring split diagonally: the top-right arc is
+    solid Deep Purple 500 (#673AB7, matches the Flutter app's primary),
+    the bottom-left arc is Deep Purple 100 (#D1C4E9). Reads as the
+    letter O, ties the "opaque" name to a two-tone opacity split, and
+    stays legible at 16px favicon size (ring thickness ~3px at that
+    scale).
+
+    Implementation: two half-circle arcs, each stroked at width 110.
+    Center 256,256 · centerline radius 185 · endpoints at NW and SE
+    where the top-left/bottom-right diagonal crosses the centerline
+    (256 ± 185·cos 45° = 125.18 and 386.82). Butt linecap = the two
+    arcs meet flush along the diagonal.
+  -->
+  <path d="M 125.18 125.18 A 185 185 0 0 1 386.82 386.82"
+        fill="none" stroke="#673AB7" stroke-width="110" stroke-linecap="butt"/>
+  <path d="M 125.18 125.18 A 185 185 0 0 0 386.82 386.82"
+        fill="none" stroke="#D1C4E9" stroke-width="110" stroke-linecap="butt"/>
+</svg>
