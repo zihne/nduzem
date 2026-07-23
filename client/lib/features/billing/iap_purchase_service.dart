@@ -3,6 +3,7 @@ import 'dart:io' show Platform;
 import 'dart:math';
 
 import 'package:in_app_purchase/in_app_purchase.dart';
+import 'package:in_app_purchase_android/in_app_purchase_android.dart';
 
 import '../../api/billing_api.dart';
 
@@ -60,6 +61,18 @@ class IapPurchaseService {
   }
 
   /// Subscribe to the purchase stream. Safe to call more than once.
+  ///
+  /// Also nudges Play to re-emit any entitlements the user paid for
+  /// but that were never verified/acked on a prior run — typically
+  /// because `/iap/verify` errored (server outage, transient network)
+  /// and the client, per its "never ack an unverified receipt"
+  /// invariant, deliberately skipped `completePurchase`. Play then
+  /// holds those tokens as owned-but-unconsumed, and every fresh buy
+  /// of the same SKU hits `ITEM_ALREADY_OWNED` ("You already have
+  /// this article") until they're processed. `restorePurchases()`
+  /// resurfaces them on the stream so the normal `_processGranted`
+  /// path finishes the job (server ADR-0033 makes `/iap/verify`
+  /// idempotent, so redelivery re-verifies cleanly).
   Future<void> initialize() async {
     if (_initialized) return;
     _initialized = true;
@@ -73,6 +86,17 @@ class IapPurchaseService {
         // failures, which are non-recoverable.
       },
     );
+    // Order matters: attach the listener first, THEN ask Play to
+    // re-emit — otherwise the redelivered updates land before we're
+    // ready and get dropped on the floor.
+    try {
+      await _iap.restorePurchases();
+    } on Object {
+      // A failed restore is not fatal — the user can still initiate
+      // fresh purchases. The stuck SKU (if any) surfaces the "already
+      // own it" error, which is the pre-fix behaviour, not a
+      // regression.
+    }
   }
 
   /// Ask Play for product details for the given SKUs. Returns the
@@ -207,11 +231,24 @@ class IapPurchaseService {
     }
 
     if (error == null && purchase.pendingCompletePurchase) {
-      // Acknowledge AFTER server accepts. If the server ever rejected
-      // this receipt, we skip completePurchase and Play redelivers
-      // on next app open — server idempotency handles that retry
-      // correctly (server ADR-0033).
-      await _iap.completePurchase(purchase);
+      // Finalise AFTER server accepts. If the server ever rejected
+      // this receipt we skip this step and Play redelivers on next
+      // app open — server idempotency handles that retry correctly
+      // (server ADR-0033).
+      //
+      // Consumables vs non-consumables need different verbs:
+      //   - credit_pack (consumable) → `consumeAsync` so Play frees
+      //     the SKU for re-purchase. The main `completePurchase()`
+      //     on `in_app_purchase_android` 0.5.x only calls
+      //     `acknowledgePurchase` — never `consumeAsync` — because
+      //     we deliberately used `buyConsumable(autoConsume: false)`
+      //     to enforce verify-then-consume ordering. Route
+      //     credit_pack SKUs to the platform addition explicitly.
+      //   - subscriptions → `acknowledgePurchase` (via
+      //     `completePurchase`) — subs must persist as "owned"
+      //     until they lapse; consuming them would let the user
+      //     re-buy an active sub.
+      await _finaliseGrantedPurchase(purchase);
     }
 
     final completer = _pending.remove(purchase.productID);
@@ -227,6 +264,27 @@ class IapPurchaseService {
       completer.completeError(error);
     }
   }
+
+  /// Finalise a server-verified purchase on the store side. Routes
+  /// consumables to Play's `consumeAsync` and non-consumables to
+  /// `acknowledgePurchase` (via `_iap.completePurchase`). See the
+  /// call-site in [_processGranted] for the rationale.
+  ///
+  /// SKU classification uses the catalog naming convention
+  /// (`credit_*` = consumable, `sub_*` = subscription). Server
+  /// response doesn't carry `productType` today; if that ever
+  /// changes, prefer the server field over the prefix check.
+  Future<void> _finaliseGrantedPurchase(PurchaseDetails purchase) async {
+    if (Platform.isAndroid && _isConsumableSku(purchase.productID)) {
+      final addition = _iap
+          .getPlatformAddition<InAppPurchaseAndroidPlatformAddition>();
+      await addition.consumePurchase(purchase);
+      return;
+    }
+    await _iap.completePurchase(purchase);
+  }
+
+  static bool _isConsumableSku(String sku) => sku.startsWith('credit_');
 
   Future<IapPurchaseOutcome> _buyStub({
     required String sku,

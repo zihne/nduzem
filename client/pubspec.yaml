@@ -5,7 +5,7 @@ publish_to: none
 # Version scheme: MAJOR.MINOR.PATCH+BUILD. BUILD is a monotonic counter that
 # store submissions bump so the same source can be re-signed without a version
 # regression. See docs/adr/0001-client-architecture.md.
-version: 0.1.0+4
+version: 0.1.0+9
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
@@ -65,6 +65,15 @@ dependencies:
   # desktop/web) we fall back to the STUB:<sku>:<txn> receipt path per
   # ADR-0002.
   in_app_purchase: ^3.2.0
+
+  # Direct dep because we call `InAppPurchaseAndroidPlatformAddition
+  # .consumePurchase(...)` explicitly for consumable SKUs — the
+  # main `in_app_purchase.completePurchase()` maps to
+  # `acknowledgePurchase` only, which acknowledges but does NOT
+  # consume, leaving Play in ITEM_ALREADY_OWNED state forever.
+  # Already a transitive dep; the direct pin just makes the import
+  # legal without relying on transitive resolution.
+  in_app_purchase_android: ^0.5.0
 
   # M4: partial wakelock during send so a screen-off phone doesn't lose
   # CPU (and its in-flight upload) to Doze. Doesn't defend against the
