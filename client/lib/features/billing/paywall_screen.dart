@@ -326,7 +326,7 @@ class _ProductTile extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    '${_mbLabel(product.mbGranted)} · ${product.sku}',
+                    _subtitleFor(product),
                     style: const TextStyle(fontStyle: FontStyle.italic),
                   ),
                   if (unavailable) ...[
@@ -392,6 +392,19 @@ class _ModeNoticeCard extends StatelessWidget {
 }
 
 // --- formatters ----------------------------------------------------------
+
+/// Tile subtitle: size + billing model. Never surface the raw SKU
+/// (developer trivia — confuses buyers). The "· one-time" and
+/// "/ month" tails also disambiguate credit vs subscription for a
+/// user skimming without reading the section header.
+String _subtitleFor(CatalogProduct p) {
+  final size = _mbLabel(p.mbGranted);
+  return switch (p.productType) {
+    'credit_pack' => '$size · one-time top-up',
+    'subscription' => '$size / month',
+    _ => size,
+  };
+}
 
 String _mbLabel(int mb) {
   if (mb >= 1024) {

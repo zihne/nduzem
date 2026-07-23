@@ -130,4 +130,40 @@ void main() {
   // UI already disables the tile button while `_purchasingSku ==
   // sku`. Testing that guard end-to-end requires a native platform
   // channel we don't have in Dart-only tests — deferred.
+
+  test('stub fallback: back-to-back buys succeed independently', () async {
+    // Regression: when the STUB path was the only exercised path, the
+    // service must not carry any per-SKU pending state across calls.
+    // (The real Play path's stale-completer-retry behaviour is
+    // untestable here without a native channel, but the STUB path
+    // must remain immune to the same wedge.)
+    when(
+      () => api.iapVerify(
+        platform: any(named: 'platform'),
+        productSku: any(named: 'productSku'),
+        region: any(named: 'region'),
+        receipt: any(named: 'receipt'),
+      ),
+    ).thenAnswer((_) async => grant('credit_starter'));
+
+    final first = await service.buy(
+      sku: 'credit_starter',
+      productType: 'credit_pack',
+    );
+    final second = await service.buy(
+      sku: 'credit_starter',
+      productType: 'credit_pack',
+    );
+
+    expect(first.result.paymentId, 'pay-1');
+    expect(second.result.paymentId, 'pay-1');
+    verify(
+      () => api.iapVerify(
+        platform: any(named: 'platform'),
+        productSku: 'credit_starter',
+        region: any(named: 'region'),
+        receipt: any(named: 'receipt'),
+      ),
+    ).called(2);
+  });
 }

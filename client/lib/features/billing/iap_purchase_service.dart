@@ -95,14 +95,24 @@ class IapPurchaseService {
   /// verification → acknowledgement. Returns the granted balance on
   /// success. Throws on cancellation / server error / Play refusal.
   ///
-  /// Concurrent buys for the same SKU are rejected — the caller
-  /// should wait for the prior purchase to resolve.
+  /// **Retry semantics.** A repeat `buy(sku)` while a prior purchase
+  /// for the same SKU is still pending retires the stale completer
+  /// with an error and proceeds with a fresh attempt. Rationale: Play
+  /// Billing does not reliably emit a `PurchaseStatus.canceled` event
+  /// when the user dismisses the Play sheet by tapping outside or
+  /// swiping down — the stream stays quiet. Without this behaviour,
+  /// one silent dismissal would wedge the SKU until the app restarts.
+  /// Rapid double-tap protection is a UI concern; the paywall
+  /// disables its button while awaiting `buy()`.
   Future<IapPurchaseOutcome> buy({
     required String sku,
     required String productType,
   }) async {
-    if (_pending.containsKey(sku)) {
-      throw StateError('A purchase for $sku is already in flight.');
+    final stale = _pending.remove(sku);
+    if (stale != null && !stale.isCompleted) {
+      stale.completeError(
+        StateError('Purchase superseded by a fresh buy() call.'),
+      );
     }
     if (!await playAvailable) {
       return _buyStub(sku: sku, productType: productType);
