@@ -33,9 +33,15 @@ void main() {
   late Directory tmp;
   late TransferHistoryRepository repo;
 
+  const testUid = 'u-alice';
+  String scopedFile(String uid) => 'transfer_history.$uid.json';
+
   setUp(() async {
     tmp = await Directory.systemTemp.createTemp('opq-hist-');
-    repo = TransferHistoryRepository(directoryOverride: tmp);
+    repo = TransferHistoryRepository(
+      userId: testUid,
+      directoryOverride: tmp,
+    );
   });
 
   tearDown(() async {
@@ -126,7 +132,7 @@ void main() {
     final read = await repo.readAll();
     expect(read, isEmpty);
     // File exists and is valid JSON with an empty entries array.
-    final f = File('${tmp.path}/transfer_history.json');
+    final f = File('${tmp.path}/${scopedFile(testUid)}');
     expect(await f.exists(), isTrue);
     final decoded = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
     expect(decoded['entries'], isEmpty);
@@ -145,7 +151,7 @@ void main() {
     // Simulate a torn write / disk corruption. The user shouldn't
     // lose the ability to see NEW history just because the old file
     // is broken.
-    final f = File('${tmp.path}/transfer_history.json');
+    final f = File('${tmp.path}/${scopedFile(testUid)}');
     await f.writeAsString('not valid json{{{');
     final read = await repo.readAll();
     expect(read, isEmpty);
@@ -156,7 +162,7 @@ void main() {
   });
 
   test('a file from a future schema version is ignored', () async {
-    final f = File('${tmp.path}/transfer_history.json');
+    final f = File('${tmp.path}/${scopedFile(testUid)}');
     await f.writeAsString(
       jsonEncode(<String, dynamic>{
         'schema_version': 999,
@@ -165,5 +171,137 @@ void main() {
     );
     final read = await repo.readAll();
     expect(read, isEmpty);
+  });
+
+  // --- ADR-0012: per-user scoping + legacy migration ----------------------
+
+  group('per-user scoping', () {
+    test('writing as Alice does not leak into Bob\'s scoped file',
+        () async {
+      final alice = TransferHistoryRepository(
+        userId: 'u-alice',
+        directoryOverride: tmp,
+      );
+      final bob = TransferHistoryRepository(
+        userId: 'u-bob',
+        directoryOverride: tmp,
+      );
+
+      await alice.log(_sent('a-1'));
+      expect(await bob.readAll(), isEmpty);
+      expect(
+        (await alice.readAll()).single.transferId,
+        'a-1',
+      );
+
+      // The physical files are distinct.
+      expect(
+        await File('${tmp.path}/transfer_history.u-alice.json').exists(),
+        isTrue,
+      );
+      expect(
+        await File('${tmp.path}/transfer_history.u-bob.json').exists(),
+        isFalse,
+      );
+    });
+
+    test('no session → reads empty, mutations no-op', () async {
+      final anon = TransferHistoryRepository(directoryOverride: tmp);
+      expect(await anon.readAll(), isEmpty);
+      await anon.log(_sent('lost'));
+      // Still empty; nothing was written.
+      expect(await anon.readAll(), isEmpty);
+      // And no file was created.
+      expect(
+        (await tmp.list().toList()).whereType<File>().toList(),
+        isEmpty,
+      );
+    });
+  });
+
+  group('legacy migration', () {
+    test('renames pre-ADR-0012 unscoped file into the current user\'s slot',
+        () async {
+      // Seed the legacy state: an unscoped file with real content.
+      final legacy = File('${tmp.path}/transfer_history.json');
+      await legacy.writeAsString(
+        jsonEncode(<String, dynamic>{
+          'schema_version': 1,
+          'entries': [_sent('legacy-1').toJson()],
+        }),
+      );
+
+      // First op on the scoped repo should trigger the migration.
+      final read = await repo.readAll();
+      expect(read.single.transferId, 'legacy-1');
+
+      // Legacy file is gone; scoped file exists in its place.
+      expect(await legacy.exists(), isFalse);
+      expect(
+        await File('${tmp.path}/${scopedFile(testUid)}').exists(),
+        isTrue,
+      );
+    });
+
+    test('migration is idempotent — second call is a no-op', () async {
+      final legacy = File('${tmp.path}/transfer_history.json');
+      await legacy.writeAsString(
+        jsonEncode(<String, dynamic>{
+          'schema_version': 1,
+          'entries': [_sent('legacy').toJson()],
+        }),
+      );
+
+      await repo.readAll();
+      // Snapshot the scoped file's mtime to detect an unwanted rewrite.
+      final scoped = File('${tmp.path}/${scopedFile(testUid)}');
+      final firstStat = await scoped.stat();
+
+      // Second call. If migration re-ran, mtime would advance.
+      await repo.readAll();
+      final secondStat = await scoped.stat();
+      expect(secondStat.modified, firstStat.modified);
+    });
+
+    test('legacy file present but scoped file already exists → no rename',
+        () async {
+      // If the user has already been on the scoped build and accumulated
+      // history, a stray legacy file must NOT overwrite it. Skip the
+      // rename; the legacy file becomes dead storage a future sweep can
+      // clean.
+      final scoped = File('${tmp.path}/${scopedFile(testUid)}');
+      await scoped.writeAsString(
+        jsonEncode(<String, dynamic>{
+          'schema_version': 1,
+          'entries': [_sent('scoped').toJson()],
+        }),
+      );
+      final legacy = File('${tmp.path}/transfer_history.json');
+      await legacy.writeAsString(
+        jsonEncode(<String, dynamic>{
+          'schema_version': 1,
+          'entries': [_sent('legacy').toJson()],
+        }),
+      );
+
+      final read = await repo.readAll();
+      expect(read.single.transferId, 'scoped');
+      // Legacy file is left alone.
+      expect(await legacy.exists(), isTrue);
+    });
+
+    test('no session → migration does not fire (legacy stays put)', () async {
+      final anon = TransferHistoryRepository(directoryOverride: tmp);
+      final legacy = File('${tmp.path}/transfer_history.json');
+      await legacy.writeAsString(
+        jsonEncode(<String, dynamic>{
+          'schema_version': 1,
+          'entries': [_sent('legacy').toJson()],
+        }),
+      );
+      // No userId → nothing to attribute the legacy file to.
+      expect(await anon.readAll(), isEmpty);
+      expect(await legacy.exists(), isTrue);
+    });
   });
 }

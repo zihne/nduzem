@@ -124,8 +124,16 @@ final iapPurchaseServiceProvider =
   return service;
 });
 
+/// Rebuilds when the auth session's `userId` changes, so a hot
+/// account swap resolves to the newly-signed-in user's scoped
+/// verification list (ADR-0012). When there's no session the repo
+/// short-circuits every call to null/no-op.
 final verifiedContactsRepoProvider = Provider<VerifiedContactsRepo>((ref) {
-  return VerifiedContactsRepo(ref.watch(secureStorageProvider));
+  final session = ref.watch(authSessionProvider).valueOrNull;
+  return VerifiedContactsRepo(
+    ref.watch(secureStorageProvider),
+    localUserId: session?.userId,
+  );
 });
 
 // --- M2 transfer surface ------------------------------------------------

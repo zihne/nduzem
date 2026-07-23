@@ -91,6 +91,15 @@ class SecureStore {
 
   Future<void> delete(String key) => _backend.delete(key: key);
 
+  /// Return every key/value pair the backend currently holds.
+  ///
+  /// Used by prefix-based migrations (e.g., ADR-0012 legacy
+  /// `vc.*` verified-contact keys) — there's no per-prefix query
+  /// on flutter_secure_storage, so callers filter the returned map
+  /// client-side. Read-only; callers that need to delete something
+  /// still go through [delete].
+  Future<Map<String, String>> readAll() => _backend.readAll();
+
   // --- bytes API -----------------------------------------------------------
 
   Future<void> writeBytes(String key, Uint8List value) =>
