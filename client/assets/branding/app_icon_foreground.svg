@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="OpaqueShare">
+  <!--
+    Android adaptive-icon foreground. 1024x1024, transparent background
+    (adaptive_icon_background supplies the fill via pubspec config).
+    Mark occupies ~60% of the canvas so it stays inside Android's
+    guaranteed 66% safe area under any launcher-imposed mask (circle,
+    squircle, teardrop, etc.).
+    Arithmetic:
+      outer r = 307, inner r = 166 → stroke = 141, centerline r = 236.5
+      diagonal endpoints = 512 ± 236.5 * cos(45°) = 344.8 / 679.2
+  -->
+  <path d="M 344.8 344.8 A 236.5 236.5 0 0 1 679.2 679.2"
+        fill="none" stroke="#673AB7" stroke-width="141" stroke-linecap="butt"/>
+  <path d="M 344.8 344.8 A 236.5 236.5 0 0 0 679.2 679.2"
+        fill="none" stroke="#D1C4E9" stroke-width="141" stroke-linecap="butt"/>
+</svg>

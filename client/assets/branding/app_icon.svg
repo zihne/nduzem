@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="OpaqueShare">
+  <!--
+    App-Store / opaque launcher source. 1024x1024, opaque off-white
+    background (Deep Purple-tinted). Mark occupies ~80% of the canvas.
+    Feeds flutter_launcher_icons `image_path` for iOS + Android legacy.
+    Arithmetic mirrors favicon.svg but scaled to 1024:
+      outer r = 410, inner r = 222 → stroke = 188, centerline r = 316
+      diagonal endpoints = 512 ± 316 * cos(45°) = 288.6 / 735.4
+  -->
+  <rect width="1024" height="1024" fill="#FAF8FC"/>
+  <path d="M 288.6 288.6 A 316 316 0 0 1 735.4 735.4"
+        fill="none" stroke="#673AB7" stroke-width="188" stroke-linecap="butt"/>
+  <path d="M 288.6 288.6 A 316 316 0 0 0 735.4 735.4"
+        fill="none" stroke="#D1C4E9" stroke-width="188" stroke-linecap="butt"/>
+</svg>

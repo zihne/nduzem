@@ -77,19 +77,25 @@ dev_dependencies:
   flutter_lints: ^5.0.0
   mocktail: ^1.0.4
   # Generates Android + iOS launcher icons from `assets/branding/app_icon.png`
-  # (main square) and `app_icon_foreground.png` (Android adaptive foreground).
+  # (opaque 1024 square, iOS + Android legacy) and
+  # `app_icon_foreground.png` (Android adaptive foreground, transparent bg,
+  # mark inside the 66% safe area). Source SVGs live alongside the PNGs so
+  # the design is regenerable.
   # Regenerate with:  dart run flutter_launcher_icons
   flutter_launcher_icons: ^0.14.2
 
-# Configuration for `flutter_launcher_icons`. Colour matches the Material
-# seedColor in lib/app.dart. Swap the source PNGs whenever the real logo
-# lands — the config below stays.
+# Configuration for `flutter_launcher_icons`. The mark is a two-tone ring
+# (Deep Purple 500 + Deep Purple 100) sitting on the app's off-white
+# surface — same palette as the `seedColor` in lib/app.dart. The adaptive
+# background is the SURFACE color (not the primary): both halves of the
+# ring must remain distinct, so a dark-purple background would swallow
+# the dark half.
 flutter_launcher_icons:
   android: "ic_launcher"
   ios: true
   image_path: "assets/branding/app_icon.png"
   # Android 8+ adaptive icons — background solid colour, foreground PNG.
-  adaptive_icon_background: "#673AB7"
+  adaptive_icon_background: "#FAF8FC"
   adaptive_icon_foreground: "assets/branding/app_icon_foreground.png"
   min_sdk_android: 21
   # Remove the alpha channel from the iOS icon per Apple's requirement.
