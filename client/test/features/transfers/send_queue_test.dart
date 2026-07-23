@@ -46,13 +46,20 @@ SendResult _successResult(String transferId, {int byteCountOnServer = 4096}) {
 
 /// Build a container that overrides both the transfer service (with
 /// `service`) and the history repository (with a real repo pointed at
-/// [tmp] so `.log()` writes don't touch the real app-docs dir).
+/// [tmp] so `.log()` writes don't touch the real app-docs dir). ADR-0012:
+/// the repo needs a `userId` to actually write anything.
+const String _testUid = 'u-tester';
+
 ProviderContainer _container(TransferService service, Directory tmp) {
   return ProviderContainer(
     overrides: [
       transferServiceProvider.overrideWith((ref) async => service),
-      transferHistoryRepositoryProvider
-          .overrideWith((_) => TransferHistoryRepository(directoryOverride: tmp)),
+      transferHistoryRepositoryProvider.overrideWith(
+        (_) => TransferHistoryRepository(
+          userId: _testUid,
+          directoryOverride: tmp,
+        ),
+      ),
     ],
   );
 }
@@ -125,8 +132,12 @@ void main() {
     expect(state.items.single.status, QueueItemStatus.done);
     expect(state.items.single.transferId, 't-1');
     // History entry got logged — the repository under tmp has one row.
-    final entries = await TransferHistoryRepository(directoryOverride: tmp)
-        .readAll();
+    // Read back through a repo scoped to the same user id the override
+    // used, so the scoped file is found.
+    final entries = await TransferHistoryRepository(
+      userId: _testUid,
+      directoryOverride: tmp,
+    ).readAll();
     expect(entries, hasLength(1));
     expect(entries.single.transferId, 't-1');
   });

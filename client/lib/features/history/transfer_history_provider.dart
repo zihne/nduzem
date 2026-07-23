@@ -1,11 +1,17 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../auth/auth_providers.dart';
 import 'transfer_history_entry.dart';
 import 'transfer_history_repository.dart';
 
-/// Repository seam — override in tests to point at a tmp dir.
+/// Repository seam — override in tests to point at a tmp dir. Rebuilds
+/// whenever the auth session's `userId` changes, so a hot account swap
+/// resolves to the newly-signed-in user's scoped history file (ADR-0012).
 final transferHistoryRepositoryProvider =
-    Provider<TransferHistoryRepository>((_) => TransferHistoryRepository());
+    Provider<TransferHistoryRepository>((ref) {
+  final session = ref.watch(authSessionProvider).valueOrNull;
+  return TransferHistoryRepository(userId: session?.userId);
+});
 
 /// Newest-first list of the local user's transfer history.
 ///

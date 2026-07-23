@@ -32,3 +32,4 @@ Status conventions:
 | [0009](0009-multi-file-batch-send.md) | Multi-file batch send (app mode) | Accepted |
 | [0010](0010-in-app-link-decrypt.md) | In-app link-mode receive (deep-link `/r/<id>#<K>`) | Accepted |
 | [0011](0011-per-user-secure-storage.md) | Per-user secure_storage for identity keypairs | Accepted |
+| [0012](0012-per-user-local-persistence.md) | Per-user local persistence for transfer history + verified contacts | Accepted |
