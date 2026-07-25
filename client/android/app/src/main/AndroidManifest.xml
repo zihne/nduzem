@@ -25,18 +25,33 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
             <!--
-                In-app link-mode receive (client ADR-0010). Universal-link
-                intent-filter claims https://<host>/r/* so tapping a share
-                link opens the app when installed and falls back to the
-                web decrypt page (server ADR-0035) otherwise.
+                Universal-link intent-filter claims three path prefixes
+                under https://<host>/ so tapping any of these email or
+                share links opens the app when installed, falling back
+                to the corresponding branded web page otherwise:
+
+                  /r/*             — in-app link-mode receive
+                                     (client ADR-0010, fallback:
+                                     server-rendered web decrypt page
+                                     per server ADR-0035)
+                  /password-reset  — in-app "choose new password" form
+                                     (fallback: infra/www/password-reset.html)
+                  /verify-email    — in-app auto-verify screen
+                                     (fallback: infra/www/verify-email.html)
+
+                All three prefixes go into a SINGLE intent-filter so
+                autoVerify treats them as one App Links host claim —
+                Android verifies the assetlinks.json once per host,
+                not per prefix.
 
                 OPERATOR TODO: replace `opaqueshare.com` with the real
                 deployment host, and deploy a matching
                 .well-known/assetlinks.json at that host containing this
-                app's release SHA-256 signing fingerprint. Without both,
-                android:autoVerify="true" fails silently and the OS
-                shows a chooser instead of routing straight to the app.
-                See ADR-0010 for the operator setup steps.
+                app's release SHA-256 signing fingerprints (upload key
+                AND Play App Signing key — both are needed). Without
+                both, android:autoVerify="true" fails silently and the
+                OS shows a chooser instead of routing straight to the
+                app. See ADR-0010 for the operator setup steps.
             -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW"/>
@@ -45,6 +60,8 @@
                 <data android:scheme="https"/>
                 <data android:host="opaqueshare.com"/>
                 <data android:pathPrefix="/r/"/>
+                <data android:pathPrefix="/password-reset"/>
+                <data android:pathPrefix="/verify-email"/>
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.
