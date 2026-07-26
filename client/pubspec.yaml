@@ -81,6 +81,14 @@ dependencies:
   # service concern for later.
   wakelock_plus: ^1.2.10
 
+  # Web-only interop for the sodium_libs peak-memory smoke test
+  # (lib/dev/sodium_smoke_main.dart). Already a transitive dep of
+  # several Flutter web plugins; the direct pin just makes
+  # `package:web` imports legal in our own code. No runtime cost on
+  # mobile — `dart:js_interop` calls are elided by the compiler on
+  # non-web targets.
+  web: ^1.1.0
+
 dev_dependencies:
   flutter_test: { sdk: flutter }
   flutter_lints: ^5.0.0
