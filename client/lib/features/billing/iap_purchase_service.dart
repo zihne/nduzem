@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io' show Platform;
 import 'dart:math';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:in_app_purchase/in_app_purchase.dart';
 import 'package:in_app_purchase_android/in_app_purchase_android.dart';
 
@@ -53,9 +54,12 @@ class IapPurchaseService {
   final Map<String, ProductDetails> _productDetailsCache = {};
 
   /// True iff we should try the real Play Billing flow. Any other
-  /// combination (iOS, desktop, Android without Play Store) falls
-  /// back to the STUB receipt path — server accepts both.
+  /// combination (iOS, web, desktop, Android without Play Store)
+  /// falls back to the STUB receipt path — server accepts both.
   Future<bool> get playAvailable async {
+    // `dart:io`'s `Platform` throws `UnsupportedError` on Flutter web
+    // when any getter is accessed. Short-circuit before touching it.
+    if (kIsWeb) return false;
     if (!Platform.isAndroid) return false;
     return _iap.isAvailable();
   }
@@ -275,7 +279,11 @@ class IapPurchaseService {
   /// response doesn't carry `productType` today; if that ever
   /// changes, prefer the server field over the prefix check.
   Future<void> _finaliseGrantedPurchase(PurchaseDetails purchase) async {
-    if (Platform.isAndroid && _isConsumableSku(purchase.productID)) {
+    // `dart:io`'s `Platform` throws on web; but we can't reach this
+    // path on web anyway (`playAvailable` returns false → `buy` takes
+    // the STUB branch and this method is never called). `kIsWeb`
+    // guard is belt-and-suspenders.
+    if (!kIsWeb && Platform.isAndroid && _isConsumableSku(purchase.productID)) {
       final addition = _iap
           .getPlatformAddition<InAppPurchaseAndroidPlatformAddition>();
       await addition.consumePurchase(purchase);
@@ -293,8 +301,11 @@ class IapPurchaseService {
     final txn = _mintStubTxn();
     final receipt = 'STUB:$sku:$txn';
     // Server routes on `platform` — iOS uses the Apple stub, Android
-    // without Play uses the Google stub, both accept STUB:*.
-    final platform = Platform.isIOS ? 'apple' : 'google';
+    // without Play uses the Google stub, web + desktop currently
+    // fall through as `google` (server accepts either stub route
+    // regardless of the true origin). `dart:io`'s `Platform` isn't
+    // safe on web, so short-circuit via `kIsWeb` before probing it.
+    final platform = (!kIsWeb && Platform.isIOS) ? 'apple' : 'google';
     final res = await _billingApi.iapVerify(
       platform: platform,
       productSku: sku,

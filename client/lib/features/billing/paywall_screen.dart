@@ -1,5 +1,6 @@
 import 'dart:io' show Platform;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../api/api_client.dart';
@@ -46,8 +47,10 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
   static const String _defaultRegion = 'US';
 
   // Catalog fetch uses whichever storefront actually applies on this
-  // device. iOS falls into "apple" (server accepts STUB regardless).
-  String get _platform => Platform.isIOS ? 'apple' : 'google';
+  // device. iOS falls into "apple"; web + Android + desktop go
+  // "google" (server accepts STUB regardless). `dart:io`'s `Platform`
+  // throws on web, so gate the probe with `kIsWeb`.
+  String get _platform => (!kIsWeb && Platform.isIOS) ? 'apple' : 'google';
 
   @override
   void initState() {
