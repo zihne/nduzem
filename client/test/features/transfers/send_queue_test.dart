@@ -8,6 +8,7 @@ import 'package:mocktail/mocktail.dart';
 
 import 'package:opaqueshare/api/api_client.dart';
 import 'package:opaqueshare/api/users_api.dart';
+import 'package:opaqueshare/crypto/plaintext_source.dart';
 import 'package:opaqueshare/features/auth/auth_providers.dart';
 import 'package:opaqueshare/features/history/transfer_history_provider.dart';
 import 'package:opaqueshare/features/history/transfer_history_repository.dart';
@@ -20,6 +21,8 @@ class _FakeTransferService extends Fake implements TransferService {}
 class _MockTransferService extends Mock implements TransferService {}
 
 class _FakeCancelToken extends Fake implements CancelToken {}
+
+class _FakePlaintextSource extends Fake implements PlaintextSource {}
 
 UserLookup _lookup() => UserLookup(
       userId: 'u-recipient',
@@ -69,6 +72,10 @@ void main() {
   setUpAll(() {
     registerFallbackValue(_FakeCancelToken());
     registerFallbackValue(SendMode.app);
+    // ADR-0013: send() now takes a `PlaintextSource` in place of the
+    // old plaintextPath/length/filename/mime quartet. Mocktail needs
+    // a fallback for the type when `any(named: 'source')` is used.
+    registerFallbackValue(_FakePlaintextSource());
   });
 
   late Directory tmp;
@@ -105,10 +112,7 @@ void main() {
       () => svc.send(
         mode: any(named: 'mode'),
         recipient: any(named: 'recipient'),
-        plaintextPath: any(named: 'plaintextPath'),
-        plaintextLength: any(named: 'plaintextLength'),
-        filename: any(named: 'filename'),
-        mime: any(named: 'mime'),
+        source: any(named: 'source'),
         linkPassword: any(named: 'linkPassword'),
         recipientEmail: any(named: 'recipientEmail'),
         maxDownloads: any(named: 'maxDownloads'),
@@ -149,10 +153,7 @@ void main() {
       () => svc.send(
         mode: any(named: 'mode'),
         recipient: any(named: 'recipient'),
-        plaintextPath: any(named: 'plaintextPath'),
-        plaintextLength: any(named: 'plaintextLength'),
-        filename: any(named: 'filename'),
-        mime: any(named: 'mime'),
+        source: any(named: 'source'),
         linkPassword: any(named: 'linkPassword'),
         recipientEmail: any(named: 'recipientEmail'),
         maxDownloads: any(named: 'maxDownloads'),
@@ -187,10 +188,7 @@ void main() {
       () => svc.send(
         mode: any(named: 'mode'),
         recipient: any(named: 'recipient'),
-        plaintextPath: any(named: 'plaintextPath'),
-        plaintextLength: any(named: 'plaintextLength'),
-        filename: any(named: 'filename'),
-        mime: any(named: 'mime'),
+        source: any(named: 'source'),
         linkPassword: any(named: 'linkPassword'),
         recipientEmail: any(named: 'recipientEmail'),
         maxDownloads: any(named: 'maxDownloads'),
@@ -231,10 +229,7 @@ void main() {
       () => svc.send(
         mode: any(named: 'mode'),
         recipient: any(named: 'recipient'),
-        plaintextPath: any(named: 'plaintextPath'),
-        plaintextLength: any(named: 'plaintextLength'),
-        filename: any(named: 'filename'),
-        mime: any(named: 'mime'),
+        source: any(named: 'source'),
         linkPassword: any(named: 'linkPassword'),
         recipientEmail: any(named: 'recipientEmail'),
         maxDownloads: any(named: 'maxDownloads'),
@@ -285,10 +280,7 @@ void main() {
       () => svc.send(
         mode: any(named: 'mode'),
         recipient: any(named: 'recipient'),
-        plaintextPath: any(named: 'plaintextPath'),
-        plaintextLength: any(named: 'plaintextLength'),
-        filename: any(named: 'filename'),
-        mime: any(named: 'mime'),
+        source: any(named: 'source'),
         linkPassword: any(named: 'linkPassword'),
         recipientEmail: any(named: 'recipientEmail'),
         maxDownloads: any(named: 'maxDownloads'),
@@ -336,10 +328,7 @@ void main() {
       () => svc.send(
         mode: any(named: 'mode'),
         recipient: any(named: 'recipient'),
-        plaintextPath: any(named: 'plaintextPath'),
-        plaintextLength: any(named: 'plaintextLength'),
-        filename: any(named: 'filename'),
-        mime: any(named: 'mime'),
+        source: any(named: 'source'),
         linkPassword: any(named: 'linkPassword'),
         recipientEmail: any(named: 'recipientEmail'),
         maxDownloads: any(named: 'maxDownloads'),

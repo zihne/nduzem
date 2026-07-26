@@ -12,6 +12,7 @@ import 'package:mime/mime.dart' show lookupMimeType;
 import '../../api/api_client.dart';
 import '../../api/users_api.dart';
 import '../../crypto/fingerprint.dart';
+import '../../crypto/plaintext_source.dart';
 import '../auth/auth_providers.dart';
 import '../history/transfer_history_entry.dart';
 import '../history/transfer_history_provider.dart';
@@ -285,10 +286,12 @@ class _SendScreenState extends ConsumerState<SendScreen> {
       final result = await svc.send(
         mode: _mode,
         recipient: _mode == SendMode.app ? _recipient : null,
-        plaintextPath: file.path,
-        plaintextLength: file.length,
-        filename: file.name,
-        mime: file.mime,
+        source: FilePlaintextSource(
+          path: file.path,
+          filename: file.name,
+          lengthBytes: file.length,
+          mimeType: file.mime,
+        ),
         linkPassword:
             _mode == SendMode.link && linkPassword.isNotEmpty
                 ? linkPassword

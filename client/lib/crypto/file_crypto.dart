@@ -7,6 +7,8 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart' as dart_crypto;
 import 'package:sodium_libs/sodium_libs.dart';
 
+import 'plaintext_source.dart';
+
 /// Symmetric file-body encryption using chunked
 /// `crypto_secretstream_xchacha20poly1305` (M4, ADR-0003).
 ///
@@ -185,9 +187,9 @@ class FileCrypto {
   String sha256Hex(Uint8List bytes) =>
       dart_crypto.sha256.convert(bytes).toString();
 
-  /// Stream-encrypt `plaintextPath` into a fresh temp file, computing
+  /// Stream-encrypt `source` into a fresh temp file, computing
   /// `blob_sha256` incrementally as ciphertext chunks are produced
-  /// (ADR-0004).
+  /// (ADR-0004, ADR-0013).
   ///
   /// Peak memory: ~one 64 KiB secretstream chunk + stream I/O
   /// overhead. Zero copies of the plaintext or the ciphertext held
@@ -206,7 +208,7 @@ class FileCrypto {
   /// file is deleted, and `SendCancelledException`-shaped state
   /// propagates via the underlying stream error.
   Future<EncryptedFileResult> encryptFileToTempFile({
-    required String plaintextPath,
+    required PlaintextSource source,
     required Uint8List key,
     Directory? tempDir,
     void Function(int done, int total)? onProgress,
@@ -216,8 +218,7 @@ class FileCrypto {
     if (!await tmpDir.exists()) {
       await tmpDir.create(recursive: true);
     }
-    final source = File(plaintextPath);
-    final totalBytes = await source.length();
+    final totalBytes = source.lengthBytes;
     final tempFile = File(
       '${tmpDir.path}/opaqueshare-${_randomId()}.enc.tmp',
     );
@@ -245,6 +246,9 @@ class FileCrypto {
       var lastEmitAt = DateTime.now();
       const emitEvery = Duration(milliseconds: 250);
       final plaintextStream = source.openRead().map<List<int>>((chunk) {
+        // Note: `source.openRead()` returns platform-defined chunks
+        // (OS-scheduled ~64 KiB on mobile; Blob slice window on web).
+        // The sodium `pushChunked` below re-chunks to `plaintextChunkBytes`.
         throwIfCancelled?.call();
         plaintextRead += chunk.length;
         final now = DateTime.now();
