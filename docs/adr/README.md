@@ -34,3 +34,4 @@ Status conventions:
 | [0011](0011-per-user-secure-storage.md) | Per-user secure_storage for identity keypairs | Accepted |
 | [0012](0012-per-user-local-persistence.md) | Per-user local persistence for transfer history + verified contacts | Accepted |
 | [0013](0013-web-send-receive-streaming.md) | Web send + receive: streaming pipeline unified across mobile and web | Accepted |
+| [0014](0014-defer-crypto-metadata-to-commit.md) | Defer per-transfer crypto metadata from `/initiate` to `/commit` (amends ADR-0013) | Accepted |
