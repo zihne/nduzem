@@ -100,6 +100,21 @@ class SecureStore {
   /// still go through [delete].
   Future<Map<String, String>> readAll() => _backend.readAll();
 
+  /// Wipe every secure_storage entry the app can see.
+  ///
+  /// Called by [AuthRepository.restoreSession] as a self-heal when a
+  /// read at startup throws `BAD_DECRYPT` — that means the Android
+  /// EncryptedSharedPreferences master key doesn't match the
+  /// on-disk ciphertext (see class doc for the trigger list). Rather
+  /// than leaving the app wedged with an unrecoverable session
+  /// error, wipe and treat the next launch as a fresh install; the
+  /// user re-registers or re-logs-in.
+  ///
+  /// Distinct from [purgeAll], which preserves other users' scoped
+  /// keypair slots. `resetOnCorruption` is the nuclear option — used
+  /// only when secure_storage is genuinely unreadable.
+  Future<void> resetOnCorruption() => _backend.deleteAll();
+
   // --- bytes API -----------------------------------------------------------
 
   Future<void> writeBytes(String key, Uint8List value) =>
