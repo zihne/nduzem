@@ -9,7 +9,7 @@ remains for later web-app branches.
 - **The main Flutter app compiles to web** cleanly:
   ```
   flutter build web \
-    --dart-define=OPAQUESHARE_API_BASE_URL=https://api.opaqueshare.com \
+    --dart-define=OPAQUESHARE_API_BASE=https://api.opaqueshare.com \
     --dart-define=OPAQUESHARE_SHARE_URL_BASE=https://opaqueshare.com
   ```
   ~41 s cold, ~10 s warm. Output at `client/build/web/`.
@@ -113,7 +113,7 @@ or migrate to a `package:web`-based storage plugin.
 ```bash
 cd client
 flutter run -d chrome --target=lib/main.dart \
-  --dart-define=OPAQUESHARE_API_BASE_URL=https://api.opaqueshare.com \
+  --dart-define=OPAQUESHARE_API_BASE=https://api.opaqueshare.com \
   --dart-define=OPAQUESHARE_SHARE_URL_BASE=https://opaqueshare.com
 ```
 
@@ -121,7 +121,7 @@ Or against the local dev API:
 
 ```bash
 flutter run -d chrome --target=lib/main.dart \
-  --dart-define=OPAQUESHARE_API_BASE_URL=http://localhost:8000 \
+  --dart-define=OPAQUESHARE_API_BASE=http://localhost:8000 \
   --dart-define=OPAQUESHARE_SHARE_URL_BASE=http://localhost:8000
 ```
 
