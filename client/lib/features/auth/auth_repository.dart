@@ -1,3 +1,7 @@
+import 'dart:developer' as developer;
+
+import 'package:flutter/services.dart';
+
 import '../../api/api_client.dart';
 import '../../api/auth_api.dart';
 import '../../api/users_api.dart';
@@ -41,30 +45,76 @@ class AuthRepository implements TokenSource {
 
   /// Load whatever's in secure storage into memory. Called from
   /// [`AuthNotifier.build`] at app start.
+  ///
+  /// **Self-heal on `BAD_DECRYPT`.** Android's EncryptedSharedPreferences
+  /// (the flutter_secure_storage backend) uses a Keystore-held master
+  /// key scoped to `(package, signing cert, install instance)`. If any
+  /// of those changes between the write and the read — app resign
+  /// (debug↔release), Google-Backup restore onto a different device,
+  /// keystore glitch after an OS update — every subsequent read
+  /// throws `PlatformException` with a `BadPaddingException /
+  /// BAD_DECRYPT` payload. That leaves the app wedged with an
+  /// unrecoverable session error that most users won't know how to
+  /// clear ("clear app data" isn't discoverable). We catch that
+  /// specific failure, wipe secure storage, and return a null
+  /// session so the router routes to /login — same as a fresh
+  /// install. User re-registers or re-logs-in, one-shot.
+  ///
+  /// Any other exception propagates — we don't want to silently
+  /// wipe a healthy session on a transient bug.
   Future<AuthSession?> restoreSession() async {
-    // ADR-0011: fold any pre-scoped single-slot keypair into the
-    // per-user layout before anything reads keys. Idempotent — a no-op
-    // once the device is on the scoped layout.
-    await _storage.migrateLegacyKeypairIfNeeded();
-    final userId = await _storage.read(SecureStore.kUserId);
-    final access = await _storage.read(SecureStore.kAccessToken);
-    final refresh = await _storage.read(SecureStore.kRefreshToken);
-    final fp = await _storage.read(SecureStore.kFingerprint);
-    final mfa = await _storage.read(SecureStore.kMfaEnabled);
-    final email = await _storage.read(SecureStore.kEmail);
-    final handle = await _storage.read(SecureStore.kHandle);
-    if (userId == null || access == null || refresh == null) return null;
-    _accessCache = access;
-    _refreshCache = refresh;
-    return AuthSession(
-      userId: userId,
-      email: email,
-      handle: handle,
-      fingerprint: fp ?? '',
-      // Legacy sessions from before M2.5 won't have the key set —
-      // default to false; the next successful login/enrol updates it.
-      mfaEnabled: mfa == 'true',
-    );
+    try {
+      // ADR-0011: fold any pre-scoped single-slot keypair into the
+      // per-user layout before anything reads keys. Idempotent — a
+      // no-op once the device is on the scoped layout.
+      await _storage.migrateLegacyKeypairIfNeeded();
+      final userId = await _storage.read(SecureStore.kUserId);
+      final access = await _storage.read(SecureStore.kAccessToken);
+      final refresh = await _storage.read(SecureStore.kRefreshToken);
+      final fp = await _storage.read(SecureStore.kFingerprint);
+      final mfa = await _storage.read(SecureStore.kMfaEnabled);
+      final email = await _storage.read(SecureStore.kEmail);
+      final handle = await _storage.read(SecureStore.kHandle);
+      if (userId == null || access == null || refresh == null) return null;
+      _accessCache = access;
+      _refreshCache = refresh;
+      return AuthSession(
+        userId: userId,
+        email: email,
+        handle: handle,
+        fingerprint: fp ?? '',
+        // Legacy sessions from before M2.5 won't have the key set —
+        // default to false; the next successful login/enrol updates it.
+        mfaEnabled: mfa == 'true',
+      );
+    } on PlatformException catch (exc) {
+      if (!_isSecureStorageDecryptCorruption(exc)) rethrow;
+      developer.log(
+        'Secure storage returned BAD_DECRYPT at cold-start — likely '
+        'master-key rotation (app resign, backup restore, or a fresh '
+        'install on top of ghost state). Wiping and treating as fresh '
+        'install so the user can re-register or re-log-in. Original '
+        'message: ${exc.message}',
+        name: 'AuthRepository.restoreSession',
+        error: exc,
+      );
+      _accessCache = null;
+      _refreshCache = null;
+      await _storage.resetOnCorruption();
+      return null;
+    }
+  }
+
+  /// Match the specific `BadPaddingException / BAD_DECRYPT` shape that
+  /// `flutter_secure_storage` surfaces on Android when the
+  /// EncryptedSharedPreferences master key can't decrypt the on-disk
+  /// blob. Deliberately narrow — anything else propagates so we don't
+  /// accidentally wipe a healthy session on an unrelated platform
+  /// error (e.g., a keystore-locked-during-first-unlock hiccup).
+  static bool _isSecureStorageDecryptCorruption(PlatformException exc) {
+    final haystack = '${exc.code} ${exc.message ?? ''} ${exc.details ?? ''}';
+    return haystack.contains('BAD_DECRYPT') ||
+        haystack.contains('BadPaddingException');
   }
 
   /// Pull the caller's `/v1/users/me` and reconcile the local session.

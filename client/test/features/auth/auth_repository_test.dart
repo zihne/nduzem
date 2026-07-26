@@ -1,6 +1,6 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 
@@ -304,6 +304,65 @@ void main() {
 
       final session = await repo.restoreSession();
       expect(session?.mfaEnabled, isFalse);
+    });
+
+    // --- self-heal on Android EncryptedSharedPreferences corruption ---
+
+    test('BAD_DECRYPT at startup → wipes storage and returns null', () async {
+      // Simulates the real production error: user's device master key
+      // no longer matches the on-disk ciphertext (app resign, backup
+      // restore, ghost install). App must recover silently — return
+      // null session so the router bounces to /login.
+      when(() => store.resetOnCorruption()).thenAnswer((_) async {});
+      when(() => store.read(SecureStore.kUserId)).thenThrow(
+        PlatformException(
+          code: 'Exception encountered, read',
+          message:
+              'javax.crypto.BadPaddingException: error:1e000065:Cipher '
+              'functions:OPENSSL_internal:BAD_DECRYPT',
+        ),
+      );
+
+      final session = await repo.restoreSession();
+      expect(session, isNull);
+      verify(() => store.resetOnCorruption()).called(1);
+    });
+
+    test('BAD_DECRYPT during migration also triggers self-heal', () async {
+      // Migration is the FIRST call inside restoreSession — if the
+      // legacy-slot probe hits BAD_DECRYPT, we must still recover.
+      when(() => store.resetOnCorruption()).thenAnswer((_) async {});
+      when(() => store.migrateLegacyKeypairIfNeeded()).thenThrow(
+        PlatformException(
+          code: 'Exception encountered, read',
+          message: 'BadPaddingException',
+        ),
+      );
+
+      final session = await repo.restoreSession();
+      expect(session, isNull);
+      verify(() => store.resetOnCorruption()).called(1);
+    });
+
+    test('non-decrypt PlatformException propagates (no silent wipe)',
+        () async {
+      // Guardrail: we don't want to silently wipe a healthy session
+      // when an unrelated platform error occurs (e.g., a keystore
+      // hiccup before device is unlocked for the first time). Only
+      // the BAD_DECRYPT / BadPaddingException signature triggers the
+      // self-heal.
+      when(() => store.read(SecureStore.kUserId)).thenThrow(
+        PlatformException(
+          code: 'unavailable',
+          message: 'Keystore not yet available.',
+        ),
+      );
+
+      await expectLater(
+        repo.restoreSession(),
+        throwsA(isA<PlatformException>()),
+      );
+      verifyNever(() => store.resetOnCorruption());
     });
   });
 
