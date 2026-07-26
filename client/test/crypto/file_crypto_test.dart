@@ -420,6 +420,229 @@ void main() {
       }
     },
   );
+
+  // ---------------------------------------------------------------------
+  // ADR-0013 Phase 2 — FileCrypto.encryptToStream
+  // ---------------------------------------------------------------------
+  // Uses the same `fc` + `skipReason` closure variables as the
+  // temp-file group above; that's why it lives inside the same
+  // `main()`. Test helper `drain` is defined per-group.
+
+  group('encryptToStream (ADR-0013)', () {
+    /// Drain the stream into a single byte buffer + return the
+    /// summary once done. Test helper only — real callers (Phase 3)
+    /// will process chunks as they arrive without accumulating.
+    Future<(Uint8List, EncryptSummary)> drain(EncryptStreamHandle h) async {
+      final all = <int>[];
+      await for (final chunk in h.stream) {
+        all.addAll(chunk);
+      }
+      final summary = await h.done;
+      return (Uint8List.fromList(all), summary);
+    }
+
+    test(
+      'semantic-equivalence with encryptFileToTempFile: same plaintext '
+      'after decrypt, same ciphertext length, valid blob_sha256',
+      () async {
+        if (skipReason != null) return;
+        final tempDir = await Directory.systemTemp.createTemp('opq-stream-eq-');
+        try {
+          final key = fc!.generateFileKey();
+          final plain = Uint8List.fromList(
+            List<int>.generate(
+              FileCrypto.plaintextChunkBytes * 3 + 4321,
+              (i) => (i * 17 + 5) & 0xff,
+            ),
+          );
+          final sourceFile = File('${tempDir.path}/plain.bin')
+            ..writeAsBytesSync(plain);
+
+          // Path A: temp-file variant (existing, mobile prod path).
+          final tempResult = await fc!.encryptFileToTempFile(
+            source: await FilePlaintextSource.fromPath(sourceFile.path),
+            key: key,
+            tempDir: tempDir,
+          );
+          final tempCiphertext =
+              await File(tempResult.ciphertextPath).readAsBytes();
+
+          // Path B: streaming variant (new).
+          final handle = fc!.encryptToStream(
+            source: await FilePlaintextSource.fromPath(sourceFile.path),
+            key: key,
+          );
+          final (streamCiphertext, streamSummary) = await drain(handle);
+
+          // Ciphertext lengths match — deterministic secretstream
+          // overhead given the same plaintext length.
+          expect(streamCiphertext.length, tempCiphertext.length);
+          expect(streamSummary.ciphertextLength, tempResult.ciphertextLength);
+
+          // Each path's ciphertext SELF-consistent (summary hash
+          // matches sha256 of that path's own emitted bytes).
+          expect(
+            streamSummary.blobSha256Hex,
+            dart_crypto.sha256.convert(streamCiphertext).toString(),
+          );
+          expect(
+            tempResult.blobSha256Hex,
+            dart_crypto.sha256.convert(tempCiphertext).toString(),
+          );
+
+          // Semantic equivalence: BOTH ciphertexts decrypt to the
+          // original plaintext. Byte-equivalence between them is
+          // impossible because sodium's init_push chooses a random
+          // header per encryption — that's the point.
+          final decryptedA =
+              await fc!.decryptFile(ciphertextBlob: tempCiphertext, key: key);
+          final decryptedB =
+              await fc!.decryptFile(ciphertextBlob: streamCiphertext, key: key);
+          expect(decryptedA, plain);
+          expect(decryptedB, plain);
+        } finally {
+          if (await tempDir.exists()) await tempDir.delete(recursive: true);
+        }
+      },
+    );
+
+    test('empty plaintext still roundtrips', () async {
+      if (skipReason != null) return;
+      final tempDir = await Directory.systemTemp.createTemp('opq-stream-mt-');
+      try {
+        final key = fc!.generateFileKey();
+        final sourceFile = File('${tempDir.path}/empty.bin')
+          ..writeAsBytesSync(<int>[]);
+
+        final handle = fc!.encryptToStream(
+          source: await FilePlaintextSource.fromPath(sourceFile.path),
+          key: key,
+        );
+        final (ciphertext, summary) = await drain(handle);
+
+        expect(summary.ciphertextLength, ciphertext.length);
+        expect(
+          summary.blobSha256Hex,
+          dart_crypto.sha256.convert(ciphertext).toString(),
+        );
+        // Decrypt back to zero bytes.
+        final decrypted =
+            await fc!.decryptFile(ciphertextBlob: ciphertext, key: key);
+        expect(decrypted, isEmpty);
+      } finally {
+        if (await tempDir.exists()) await tempDir.delete(recursive: true);
+      }
+    });
+
+    test('progress fires and ends at 100%', () async {
+      if (skipReason != null) return;
+      final tempDir = await Directory.systemTemp.createTemp('opq-stream-prog-');
+      try {
+        final key = fc!.generateFileKey();
+        final plain = Uint8List.fromList(
+          List<int>.generate(FileCrypto.plaintextChunkBytes * 4, (i) => i),
+        );
+        final sourceFile = File('${tempDir.path}/plain.bin')
+          ..writeAsBytesSync(plain);
+
+        var lastDone = -1;
+        var lastTotal = -1;
+        final handle = fc!.encryptToStream(
+          source: await FilePlaintextSource.fromPath(sourceFile.path),
+          key: key,
+          onProgress: (done, total) {
+            lastDone = done;
+            lastTotal = total;
+          },
+        );
+        await drain(handle);
+
+        expect(lastTotal, plain.length);
+        expect(lastDone, plain.length);
+      } finally {
+        if (await tempDir.exists()) await tempDir.delete(recursive: true);
+      }
+    });
+
+    test(
+      'cancel mid-stream throws on the stream AND errors the `done` future',
+      () async {
+        if (skipReason != null) return;
+        final tempDir = await Directory.systemTemp.createTemp('opq-stream-cx-');
+        try {
+          final key = fc!.generateFileKey();
+          final plain = Uint8List.fromList(
+            List<int>.generate(
+              FileCrypto.plaintextChunkBytes * 5,
+              (i) => i & 0xff,
+            ),
+          );
+          final sourceFile = File('${tempDir.path}/plain.bin')
+            ..writeAsBytesSync(plain);
+
+          var callCount = 0;
+          void cancelOnThirdCheck() {
+            callCount++;
+            if (callCount >= 3) throw const _TestCancelled();
+          }
+
+          final handle = fc!.encryptToStream(
+            source: await FilePlaintextSource.fromPath(sourceFile.path),
+            key: key,
+            throwIfCancelled: cancelOnThirdCheck,
+          );
+
+          // Stream errors when the cancel check throws.
+          await expectLater(
+            handle.stream.toList(),
+            throwsA(isA<_TestCancelled>()),
+          );
+          // `done` mirrors the same error (test the caller's
+          // side-channel invariant).
+          await expectLater(
+            handle.done,
+            throwsA(isA<_TestCancelled>()),
+          );
+        } finally {
+          if (await tempDir.exists()) await tempDir.delete(recursive: true);
+        }
+      },
+    );
+
+    test('summary is only valid AFTER stream drains (contract check)',
+        () async {
+      if (skipReason != null) return;
+      final tempDir = await Directory.systemTemp.createTemp('opq-stream-sd-');
+      try {
+        final key = fc!.generateFileKey();
+        final plain = Uint8List.fromList(List<int>.filled(1024, 0x41));
+        final sourceFile = File('${tempDir.path}/plain.bin')
+          ..writeAsBytesSync(plain);
+
+        final handle = fc!.encryptToStream(
+          source: await FilePlaintextSource.fromPath(sourceFile.path),
+          key: key,
+        );
+
+        // Before drain: done is unresolved.
+        var resolved = false;
+        // ignore: unawaited_futures
+        handle.done.then((_) => resolved = true);
+        // Yield one microtask so any accidental sync completion
+        // could fire — none should.
+        await Future<void>.value();
+        expect(resolved, isFalse);
+
+        // Drain. Now done resolves with a valid summary.
+        await handle.stream.toList();
+        final summary = await handle.done;
+        expect(summary.ciphertextLength, greaterThan(plain.length));
+        expect(summary.blobSha256Hex, hasLength(64));
+      } finally {
+        if (await tempDir.exists()) await tempDir.delete(recursive: true);
+      }
+    });
+  });
 }
 
 class _TestCancelled implements Exception {

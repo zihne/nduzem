@@ -309,6 +309,140 @@ class FileCrypto {
     }
   }
 
+  /// Stream-encrypt `source` and return the ciphertext AS A STREAM
+  /// of `Uint8List` chunks — no temp file (ADR-0013 Phase 2).
+  ///
+  /// This is the platform-neutral counterpart to
+  /// [encryptFileToTempFile]. Both produce a valid OS4S container
+  /// that decrypts to the same plaintext; both use the same 64 KiB
+  /// secretstream chunking. The only differences are:
+  ///
+  ///   - **Output shape**: chunks emitted on a `Stream<Uint8List>`
+  ///     instead of written to a temp file at `ciphertextPath`.
+  ///   - **Summary delivery**: `blobSha256Hex` + `ciphertextLength`
+  ///     are only known after the stream drains, so they're
+  ///     delivered via the [EncryptStreamHandle.done] Future which
+  ///     completes when the last chunk has been emitted.
+  ///
+  /// **Byte-equivalence is impossible by design.** libsodium's
+  /// `crypto_secretstream_xchacha20poly1305_init_push` chooses a
+  /// random header on every call — encrypting the same plaintext
+  /// twice yields different ciphertext (that's the point of the
+  /// random header). What IS invariant:
+  ///
+  ///   - Decrypting the emitted stream reproduces the original
+  ///     plaintext bit-for-bit.
+  ///   - `ciphertextLength` equals `plaintextLength + magic_prefix
+  ///     + (chunk_count * secretstream_overhead)` — deterministic
+  ///     given the input length.
+  ///   - `blobSha256Hex` matches sha256 of the concatenated stream
+  ///     chunks (rolling digest computed as chunks emit).
+  ///
+  /// **Caller contract** — you MUST fully consume the returned
+  /// stream. The `done` Future only completes when the stream drains
+  /// (normally or with an error). Cancelling the stream mid-way (by
+  /// dropping the subscription) leaves `done` pending indefinitely.
+  /// If you need mid-stream cancellation, throw from
+  /// `throwIfCancelled`; that surfaces as an error on the stream AND
+  /// completes `done` with the error.
+  ///
+  /// Peak memory: ~one 64 KiB secretstream chunk + the small rolling
+  /// SHA-256 state. Zero copies of the plaintext or ciphertext held
+  /// whole; the caller is expected to drain each chunk (upload it,
+  /// accumulate into a part buffer, etc.) as it arrives.
+  EncryptStreamHandle encryptToStream({
+    required PlaintextSource source,
+    required Uint8List key,
+    void Function(int done, int total)? onProgress,
+    void Function()? throwIfCancelled,
+  }) {
+    final doneCompleter = Completer<EncryptSummary>();
+    final chunks = _encryptChunks(
+      source: source,
+      key: key,
+      onProgress: onProgress,
+      throwIfCancelled: throwIfCancelled,
+      doneCompleter: doneCompleter,
+    );
+    return EncryptStreamHandle._(stream: chunks, done: doneCompleter.future);
+  }
+
+  Stream<Uint8List> _encryptChunks({
+    required PlaintextSource source,
+    required Uint8List key,
+    required Completer<EncryptSummary> doneCompleter,
+    void Function(int done, int total)? onProgress,
+    void Function()? throwIfCancelled,
+  }) async* {
+    final totalBytes = source.lengthBytes;
+    final secret = SecureKey.fromList(_sodium, key);
+
+    dart_crypto.Digest? digest;
+    final digestSink = ChunkedConversionSink<dart_crypto.Digest>.withCallback(
+      (digests) => digest = digests.single,
+    );
+    final hasher = dart_crypto.sha256.startChunkedConversion(digestSink);
+    var ciphertextLength = 0;
+
+    // Progress throttle — same shape as encryptFileToTempFile.
+    var plaintextRead = 0;
+    var lastEmitAt = DateTime.now();
+    const emitEvery = Duration(milliseconds: 250);
+
+    try {
+      final magic = Uint8List.fromList(magicPrefix);
+      yield magic;
+      hasher.add(magic);
+      ciphertextLength += magic.length;
+
+      final plaintextStream = source.openRead().map<List<int>>((chunk) {
+        throwIfCancelled?.call();
+        plaintextRead += chunk.length;
+        final now = DateTime.now();
+        final done = plaintextRead == totalBytes;
+        if (done || now.difference(lastEmitAt) >= emitEvery) {
+          lastEmitAt = now;
+          onProgress?.call(plaintextRead, totalBytes);
+        }
+        return chunk;
+      });
+
+      final ciphertextStream = _sodium.crypto.secretStream.pushChunked(
+        messageStream: plaintextStream,
+        key: secret,
+        chunkSize: plaintextChunkBytes,
+      );
+
+      await for (final chunk in ciphertextStream) {
+        final asBytes = chunk is Uint8List ? chunk : Uint8List.fromList(chunk);
+        yield asBytes;
+        hasher.add(asBytes);
+        ciphertextLength += asBytes.length;
+      }
+
+      hasher.close();
+      final finalDigest = digest;
+      if (finalDigest == null) {
+        throw StateError('sha256 sink closed without emitting a digest');
+      }
+      if (!doneCompleter.isCompleted) {
+        doneCompleter.complete(
+          EncryptSummary(
+            blobSha256Hex: finalDigest.toString(),
+            ciphertextLength: ciphertextLength,
+          ),
+        );
+      }
+    } on Object catch (exc, st) {
+      if (!doneCompleter.isCompleted) {
+        doneCompleter.completeError(exc, st);
+      }
+      rethrow;
+    } finally {
+      secret.dispose();
+    }
+  }
+
   /// Stream-decrypt `ciphertextPath` into a fresh plaintext temp file
   /// (ADR-0006). Mirror of [encryptFileToTempFile] on the receive
   /// side. Peak memory: ~one 64 KiB secretstream chunk + stream I/O
@@ -483,6 +617,38 @@ class FileCrypto {
     }
     return buf.toString();
   }
+}
+
+/// Handle returned by [FileCrypto.encryptToStream] (ADR-0013 Phase 2).
+/// Two parts:
+///
+///   - [stream] emits the ciphertext chunk-by-chunk. The caller MUST
+///     fully consume it — subscribe, drain, close — or [done] will
+///     never resolve.
+///   - [done] resolves with the summary (`blob_sha256`, ciphertext
+///     length) once the stream has drained normally, or with the
+///     same error the stream errored with.
+class EncryptStreamHandle {
+  const EncryptStreamHandle._({required this.stream, required this.done});
+  final Stream<Uint8List> stream;
+  final Future<EncryptSummary> done;
+}
+
+/// The two pieces of metadata a caller needs after streaming
+/// encryption completes — the ciphertext SHA-256 (goes into the
+/// server's `/initiate` call) and the total byte count (goes into
+/// the multipart plan's total-size + used for quota accounting).
+///
+/// Only available AFTER [EncryptStreamHandle.stream] drains — the
+/// hash and length are both accumulated as chunks emit, so they're
+/// undefined mid-stream.
+class EncryptSummary {
+  const EncryptSummary({
+    required this.blobSha256Hex,
+    required this.ciphertextLength,
+  });
+  final String blobSha256Hex;
+  final int ciphertextLength;
 }
 
 /// Result of [FileCrypto.encryptFileToTempFile]. The caller uploads
