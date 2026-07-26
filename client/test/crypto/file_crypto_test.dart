@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sodium_libs/sodium_libs.dart';
 
 import 'package:opaqueshare/crypto/file_crypto.dart';
+import 'package:opaqueshare/crypto/plaintext_source.dart';
 
 /// M4 ciphertext-format tests (ADR-0003).
 ///
@@ -141,7 +142,7 @@ void main() {
         int lastDone = -1;
         int lastTotal = -1;
         final result = await fc!.encryptFileToTempFile(
-          plaintextPath: source.path,
+          source: await FilePlaintextSource.fromPath(source.path),
           key: key,
           tempDir: tempDir,
           onProgress: (done, total) {
@@ -201,7 +202,7 @@ void main() {
 
         await expectLater(
           fc!.encryptFileToTempFile(
-            plaintextPath: source.path,
+            source: await FilePlaintextSource.fromPath(source.path),
             key: key,
             tempDir: tempDir,
             throwIfCancelled: throwOnThirdCall,
@@ -234,7 +235,7 @@ void main() {
       await source.writeAsBytes(<int>[]);
 
       final result = await fc!.encryptFileToTempFile(
-        plaintextPath: source.path,
+        source: await FilePlaintextSource.fromPath(source.path),
         key: key,
         tempDir: tempDir,
       );
@@ -268,7 +269,7 @@ void main() {
         await source.writeAsBytes(plain);
 
         final enc = await fc!.encryptFileToTempFile(
-          plaintextPath: source.path,
+          source: await FilePlaintextSource.fromPath(source.path),
           key: key,
           tempDir: tempDir,
         );
@@ -384,7 +385,7 @@ void main() {
         final source = File('${tempDir.path}/source.bin');
         await source.writeAsBytes(plain);
         final enc = await fc!.encryptFileToTempFile(
-          plaintextPath: source.path,
+          source: await FilePlaintextSource.fromPath(source.path),
           key: key,
           tempDir: tempDir,
         );

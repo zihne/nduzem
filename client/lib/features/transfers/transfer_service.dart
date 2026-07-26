@@ -13,6 +13,7 @@ import '../../api/transfers_api.dart';
 import '../../api/users_api.dart';
 import '../../crypto/envelope.dart';
 import '../../crypto/file_crypto.dart';
+import '../../crypto/plaintext_source.dart';
 import '../../crypto/sealed_box.dart';
 import '../../storage/secure_storage.dart';
 
@@ -75,10 +76,16 @@ class TransferService {
   // --- SEND -------------------------------------------------------------
 
   /// Encrypt, upload, and commit a transfer. Streaming from disk:
-  /// plaintext is read chunk-by-chunk from `plaintextPath` through
+  /// plaintext is read chunk-by-chunk from `source` through
   /// secretstream into a temp file, then that temp file is uploaded
   /// part-by-part (multipart) or in one shot (< 5 MiB). Peak memory
   /// ≈ 8 MiB regardless of file size (ADR-0004).
+  ///
+  /// `source` (ADR-0013) is the platform-neutral input:
+  /// [FilePlaintextSource] on mobile (backed by a file path);
+  /// [BytesPlaintextSource] for in-memory payloads; a future
+  /// `BlobPlaintextSource` on web. Filename, MIME, and total
+  /// plaintext length all come off `source`.
   ///
   /// **Modes** (ADR-0005):
   ///   - [SendMode.app]: recipient has an account; K_file is sealed
@@ -92,7 +99,7 @@ class TransferService {
   ///
   /// `onProgress` fires with `(phase, done, total)`:
   ///   - `SendPhase.encrypting`: `done` = plaintext bytes read,
-  ///     `total` = `plaintextLength`.
+  ///     `total` = `source.lengthBytes`.
   ///   - `SendPhase.uploading`: `done` = ciphertext bytes PUT,
   ///     `total` = final ciphertext size.
   ///
@@ -102,10 +109,7 @@ class TransferService {
   Future<SendResult> send({
     required SendMode mode,
     UserLookup? recipient,
-    required String plaintextPath,
-    required int plaintextLength,
-    required String filename,
-    String? mime,
+    required PlaintextSource source,
     String? linkPassword,
     String? recipientEmail,
     int maxDownloads = 1,
@@ -136,10 +140,10 @@ class TransferService {
 
       // 2. Stream-encrypt plaintext → temp file, rolling SHA-256 in
       // the same pass. Peak memory ≈ one 64 KiB secretstream chunk.
-      onProgress?.call(SendPhase.encrypting, 0, plaintextLength);
+      onProgress?.call(SendPhase.encrypting, 0, source.lengthBytes);
       final tempDir = await getTemporaryDirectory();
       final enc = await _fileCrypto.encryptFileToTempFile(
-        plaintextPath: plaintextPath,
+        source: source,
         key: fileKey,
         tempDir: tempDir,
         throwIfCancelled: cancel?.throwIfCancelled,
@@ -156,11 +160,13 @@ class TransferService {
       // doesn't sit at "Encrypting 100%" during that gap.
       onProgress?.call(SendPhase.preparing, 0, 0);
 
-      // 3. Build enc_header (encrypted metadata blob).
+      // 3. Build enc_header (encrypted metadata blob). filename +
+      // mime + plaintextLength come off the PlaintextSource — same
+      // three values the caller previously passed as loose params.
       final encHeader = _envelope.buildEncHeader(
-        filename: filename,
-        mime: mime,
-        plaintextLength: plaintextLength,
+        filename: source.filename,
+        mime: source.mimeType,
+        plaintextLength: source.lengthBytes,
         blobSha256Hex: enc.blobSha256Hex,
         fileKey: fileKey,
       );
