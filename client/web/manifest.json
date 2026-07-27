@@ -1,12 +1,12 @@
 {
-    "name": "opaqueshare",
-    "short_name": "opaqueshare",
+    "name": "OpaqueShare",
+    "short_name": "OpaqueShare",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
-    "orientation": "portrait-primary",
+    "background_color": "#673AB7",
+    "theme_color": "#673AB7",
+    "description": "End-to-end encrypted file transfer. Files leave your device already sealed; the server only ever sees ciphertext.",
+    "orientation": "any",
     "prefer_related_applications": false,
     "icons": [
         {
