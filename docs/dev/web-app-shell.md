@@ -1,101 +1,105 @@
-# Web app — shell status + follow-ups
+# Web app — status + deployment
 
 Companion to the [scale-to-business roadmap Workstream 3](../../../opaqueshare-server/docs/roadmap/2026-scale-to-business.md).
-This doc captures the state after `feat/web-app-shell` and what
-remains for later web-app branches.
+Started as the `feat/web-app-shell` handover; now covers everything
+that landed through Phase 7 + the deploy plumbing.
 
-## What works on this branch
+## What ships today
 
-- **The main Flutter app compiles to web** cleanly:
-  ```
-  flutter build web \
-    --dart-define=OPAQUESHARE_API_BASE=https://api.opaqueshare.com \
-    --dart-define=OPAQUESHARE_SHARE_URL_BASE=https://opaqueshare.com
-  ```
-  ~41 s cold, ~10 s warm. Output at `client/build/web/`.
+- Full parity with mobile on send + receive (both app + link mode),
+  inbox, history, verify-contact.
+- Streaming send: encrypt-in-browser + upload-in-parts, peak memory
+  ≈ 5 MiB regardless of file size (ADR-0013).
+- Streaming receive: download + decrypt into a browser Blob; save via
+  File System Access API on Chromium or `<a download>` fallback on
+  Firefox / Safari (ADR-0013 Phase 6).
+- Transfer history persisted in `localStorage`, per user id.
+- Paywall shows a "buy in the mobile app" nudge on web instead of the
+  purchase tiles (Google / Apple IAP handles VAT / sales-tax
+  remittance for us).
+- Layout is capped at 720 px + centered on wide viewports, so desktop
+  browsers don't get a stretched mobile UI.
+- Branded PWA — icons + `manifest.json` + favicon all match the
+  deepPurple app theme.
 
-- **`sodium_libs` loads via `web/sodium.js`** (set up on the earlier
-  `feat/web-app-scaffold` branch; `flutter pub run
-  sodium_libs:update_web` installs it if it ever goes missing).
+Cross-browser QA checklist for what to verify by hand on each browser:
+[docs/dev/web-cross-browser-qa.md](web-cross-browser-qa.md).
 
-- **Auth flow paths reach without crashing on web:**
-  - `/` (home)
-  - `/login`, `/register`, `/login/totp`
-  - `/verify-email`, `/password-reset`
-  - `/inbox`, `/history`
-  - `/paywall` — the `Platform.isIOS` probe was gated with `kIsWeb`
-    on this branch so navigating to it doesn't crash; the STUB fallback
-    catalog is fetched.
+## Deploying
 
-- **All existing mobile tests still pass** (152/152). The `kIsWeb`
-  guards are additive — mobile continues to hit the Platform branches
-  it always did.
+Web bundle compiles on your dev machine and `rsync`s to the prod
+box. Caddy on the server serves the static files at
+`https://app.opaqueshare.com`. **Nothing Flutter-related runs on the
+server** — just the existing Caddy container.
 
-## What definitely does NOT work yet on web
+### One-time setup
 
-Reachable but broken; needs its own branch to fix. Do NOT hand a web
-URL to a user expecting these to work.
+1. **DNS** — A / AAAA record for `app.opaqueshare.com` pointing at
+   the prod box. ACME provisions the cert on the first HTTPS request
+   once DNS resolves.
+2. **CORS** — the api service's `CORS_ALLOWED_ORIGINS` env must
+   include `https://app.opaqueshare.com`. Already in
+   `infra/docker/.env.prod.example` on the server repo; check your
+   actual `.env.prod` on the box.
+3. **Caddy reload** — the first time the `app.` vhost lands on the
+   server:
+   ```bash
+   docker compose -f infra/docker/docker-compose.prod.yml \
+     exec caddy caddy reload --config /etc/caddy/Caddyfile
+   ```
 
-### File send / receive (biggest gap)
+### Every release
 
-- `send_screen.dart`, `receive_screen.dart`, `link_receive_screen.dart`,
-  `batch_send_screen.dart` all import `dart:io` and use `File(...)`,
-  `getApplicationDocumentsDirectory()`, etc. On web these throw
-  `UnsupportedError` at runtime.
-- `transfer_service.dart` streams from disk via `File.openRead()` —
-  no equivalent on web (browsers use `File` from `dart:html` / `Blob`
-  slicing).
-- The proven-good `sodium_libs` streaming crypto path (see
-  [sodium-web-smoke-test.md](sodium-web-smoke-test.md)) works, but
-  the input side needs a browser-native `File` → `Stream<List<int>>`
-  bridge. Belongs on **`feat/web-app-send-receive`**.
+```bash
+# On your dev machine
+cd client
+scripts/build-web-release.sh \
+  https://api.opaqueshare.com \
+  https://opaqueshare.com
 
-### Storage caveats
+# Push to prod (Caddy serves the new files immediately — bind-mount)
+rsync -av --delete build/web/ \
+  prod:/opt/opaqueshare-server/infra/www-app/
+```
 
-- `flutter_secure_storage_web` uses IndexedDB with a per-origin AES
-  key stored in `window.crypto.subtle`. **Data is per-origin and
-  per-browser** — a user signed in on `app.opaqueshare.com` in Chrome
-  has NO shared state with the same user on mobile.
-- Which means: **first login on the web app is always "fresh device"**
-  from ADR-0011's perspective. The user has to re-register OR log in
-  with an existing account and accept that received-transfer decrypt
-  won't work (private keys aren't on this device).
-- Long-term fix: some form of secure key export/import
-  (QR-scan-your-mobile-to-web pairing, or a paper-backup path). Big
-  scope; not v1.
+[`scripts/build-web-release.sh`](../../client/scripts/build-web-release.sh)
+runs the full preflight (analyze + tests) before building, and prints
+the exact `rsync` command to copy for step 2. Mirrors the mobile
+`build-release.sh` pattern.
 
-### Link-mode receive at `/r/:transferId` on web
+The rsync target path assumes the server repo lives at
+`/opt/opaqueshare-server/` on the box. Adjust for your actual
+clone location. The bind-mount source is
+[`infra/www-app/`](../../../opaqueshare-server/infra/www-app/README.md)
+in the server repo (see the README there for the same workflow from
+the server-repo perspective).
 
-- Router accepts the path (matches mobile), but `LinkReceiveScreen`
-  uses `dart:io File` + `Platform.isAndroid` and would crash on web.
-- Not urgent because shared links point at `opaqueshare.com/r/<id>`
-  (marketing domain) which serves the server-rendered web decrypt
-  page (server ADR-0035). The Flutter web app at
-  `app.opaqueshare.com/r/<id>` is a redundant route today; either
-  make it work in the web-send-receive branch, or make the router
-  redirect to the marketing site on web.
+## Known caveats
 
-### Deep-linked in-app purchase
+### Storage is per-origin
 
-- Play Billing / StoreKit don't exist on web. The `IapPurchaseService`
-  already falls through to the STUB receipt path on web (via
-  `playAvailable → false`). But the STUB path talks to the API and
-  actually credits balances — **on prod, we probably don't want web
-  visitors to be able to purchase via STUB.**
-- v1 web app should show a "buy on mobile" CTA on the paywall
-  instead of surfacing STUB purchases. Belongs on
-  **`feat/web-app-history-settings`** (paywall polish).
+`flutter_secure_storage_web` and the transfer-history localStorage
+both live under the `app.opaqueshare.com` origin. A user signed in
+on the web has NO shared state with themselves on mobile.
 
-### Deployment
+Practical consequence: **first web login is always "fresh device"**
+from ADR-0011's perspective. The user has to re-register OR log in
+with an existing account and accept that received-transfer decrypt
+won't work (their private keys aren't on this device).
 
-- No Caddy handle block for `app.opaqueshare.com` yet.
-- No CORS entry for `app.opaqueshare.com` on the API (`api.opaqueshare
-  .com` currently allows `opaqueshare.com` and `api.opaqueshare.com` —
-  the web app will get CORS-blocked calling `/v1/*` from
-  `app.opaqueshare.com`).
-- Belongs on **`feat/web-app-deploy`** with the DNS + Caddy work.
+Long-term fix: some form of secure key export/import
+(QR-scan-your-mobile-to-web pairing, or a paper-backup path). Big
+scope; not v1.
 
-## Wasm build (deferred)
+### Link-mode receive at `/r/:transferId`
+
+`app.opaqueshare.com/r/<id>` is a redundant route today — shared
+links point at `opaqueshare.com/r/<id>` (marketing domain) which
+serves the server-rendered web decrypt page (server ADR-0035). The
+Flutter web app's link-receive path works, but users won't naturally
+land on it. Not a bug, just a routing overlap to be aware of.
+
+### Wasm build (deferred)
 
 `flutter build web --wasm` fails with:
 
@@ -103,8 +107,8 @@ URL to a user expecting these to work.
 package:flutter_secure_storage_web/... uses dart:html (0), dart:js_util (15)
 ```
 
-These deprecated JS-interop APIs block wasm. Not blocking for v1
-(standard JS build works fine). If wasm becomes important for perf
+These deprecated JS-interop APIs block wasm. Not blocking for v1 —
+the standard JS build works fine. If wasm becomes important for perf
 later, the fix is upstream — file an issue on `flutter_secure_storage`
 or migrate to a `package:web`-based storage plugin.
 
@@ -112,29 +116,32 @@ or migrate to a `package:web`-based storage plugin.
 
 ```bash
 cd client
-flutter run -d chrome --target=lib/main.dart \
-  --dart-define=OPAQUESHARE_API_BASE=https://api.opaqueshare.com \
-  --dart-define=OPAQUESHARE_SHARE_URL_BASE=https://opaqueshare.com
-```
-
-Or against the local dev API:
-
-```bash
-flutter run -d chrome --target=lib/main.dart \
+flutter run -d chrome --web-port=5173 --target=lib/main.dart \
   --dart-define=OPAQUESHARE_API_BASE=http://localhost:8000 \
   --dart-define=OPAQUESHARE_SHARE_URL_BASE=http://localhost:8000
 ```
 
-Note that the localhost variant requires the dev API to have CORS
-open to `http://localhost:5000` or whatever port Chrome picks.
+Pin `--web-port=5173` (or 5000 / 8080) — the dev backend's CORS
+allowlist only covers those localhost ports out of the box. To add
+another, set `CORS_ALLOWED_ORIGINS=http://localhost:<port>` on the
+api service in `infra/docker/docker-compose.dev.yml`.
 
-## The remaining web-app branches
+## Historical: the web-app phase list
 
-| Branch | Scope | Est. |
-|---|---|---|
-| `feat/web-app-send-receive` | Browser File API → `sodium_libs` streaming bridge; send + receive screens for web; keep mobile paths intact | 2-3 weeks |
-| `feat/web-app-history-settings` | History + settings screens web-polished; paywall shows "buy on mobile" on web | ~1 week |
-| `feat/web-app-deploy` | Caddy handle block for `app.opaqueshare.com`, DNS, API CORS entry, cross-browser QA | ~1 week |
+For posterity — the phased rollout ADR-0013 called for, all now
+merged into main:
 
-Order matters. Send/receive is the biggest chunk; do it first so the
-web app has actual value before we deploy anywhere.
+| Branch | What it did |
+|---|---|
+| `feat/web-send-1-plaintext-source` | `PlaintextSource` abstraction |
+| `feat/web-send-2-encrypt-stream` | `FileCrypto.encryptToStream` |
+| `feat/api-metadata-at-commit` | Server contract change (ADR-0014 / server ADR-0037) |
+| `feat/web-send-3-transfer-service` | Streaming send pipeline, temp-file staging retired |
+| `feat/web-send-4-web-implementations` | `BlobPlaintextSource` + browser file picker |
+| `feat/web-receive-1-decrypt-stream` | `FileCrypto.decryptToStream` + `PlaintextDestination` |
+| `feat/web-receive-2-blob-save` | FSA / `<a download>` save on web |
+| `feat/web-send-receive-polish` | Large-screen layout, oversized-file error copy, cancel-in-flight polish |
+| `feat/web-progress-and-qa` | Single-figure progress bar, cross-browser QA checklist |
+| `feat/web-transfer-history` | `localStorage` history on web |
+| `feat/web-branding-and-paywall-nudge` | Web icons + manifest, "buy in mobile app" nudge |
+| `feat/web-app-deploy` (server) + `feat/web-release-build-script` (client) | Caddy vhost + rsync deploy workflow |
