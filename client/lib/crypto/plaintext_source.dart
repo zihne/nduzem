@@ -2,12 +2,13 @@ import 'dart:io';
 import 'dart:typed_data';
 
 /// Platform-neutral view of "the plaintext bytes we're about to
-/// encrypt + upload" (ADR-0013 Phase 1).
+/// encrypt + upload" (ADR-0013 Phase 1 + Phase 4).
 ///
 /// Mobile has a filesystem — pass a `FilePlaintextSource(path: …)`.
-/// Web has `Blob`s from the browser file picker — a future
-/// `BlobPlaintextSource` (Phase 4) implements the same interface via
-/// `Blob.slice(...).arrayBuffer()`.
+/// Web has `Blob`s from the browser file picker — pass a
+/// `BlobPlaintextSource(blob: …)` from
+/// `crypto/blob_plaintext_source.dart` (streams via `Blob.slice(...)
+/// .arrayBuffer()` under the hood).
 ///
 /// The single-pipeline invariant from ADR-0013: `openRead()` must be
 /// callable AS A STREAM (not "load into memory then wrap in a
@@ -150,3 +151,4 @@ class BytesPlaintextSource implements PlaintextSource {
     }
   }
 }
+

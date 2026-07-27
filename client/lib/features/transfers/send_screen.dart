@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -20,6 +21,7 @@ import '../verify_contact/verified_contacts_repo.dart';
 import 'picked_file.dart';
 import 'send_queue.dart';
 import 'transfer_service.dart';
+import 'web_file_picker.dart';
 
 /// M2 send flow (spec §5.2). Three visible stages inside one screen:
 ///
@@ -96,55 +98,26 @@ class _SendScreenState extends ConsumerState<SendScreen> {
   }
 
   Future<void> _pickFile() async {
-    // `withData: false` so the plugin doesn't eagerly load bytes at
-    // pick time. Streaming send (ADR-0004) reads the file on demand.
-    // On Android with SAF, `pickFiles` still copies the selected
-    // file into app cache before returning — for a multi-GB file
-    // that copy can take tens of seconds with no visible activity.
-    // `_picking` becomes visible when SAF dismisses, so the user
-    // sees "Reading file…" during that gap.
+    // On Android with SAF, `pickFiles` copies the selected file into
+    // the app cache before returning — for a multi-GB file that
+    // copy can take tens of seconds with no visible activity.
+    // `_picking` becomes visible while the picker runs so the user
+    // sees "Reading file…" during that gap. Same busy-flag on web
+    // for a shorter blob-hoist.
     setState(() {
       _picking = true;
       _error = null;
       _quotaError = null;
     });
     try {
-      final res = await FilePicker.platform.pickFiles(
-        withData: false,
-        allowMultiple: true,
-      );
-      if (res == null || res.files.isEmpty) return;
-      final picked = <PickedFile>[];
-      for (final f in res.files) {
-        if (f.path == null) {
-          if (mounted) {
-            setState(
-              () => _error =
-                  'Could not read "${f.name}" — no path was returned.',
-            );
-          }
-          return;
-        }
-        final int size;
-        try {
-          size = await File(f.path!).length();
-        } on Object catch (exc) {
-          if (mounted) {
-            setState(
-              () => _error = 'Could not stat "${f.name}": $exc',
-            );
-          }
-          return;
-        }
-        picked.add(
-          PickedFile(
-            name: f.name,
-            mime: lookupMimeType(f.name),
-            path: f.path!,
-            length: size,
-          ),
-        );
+      final List<PickedFile> picked;
+      try {
+        picked = kIsWeb ? await pickFilesWeb() : await _pickFilesMobile();
+      } on _PickError catch (exc) {
+        if (mounted) setState(() => _error = exc.message);
+        return;
       }
+      if (picked.isEmpty) return;
       if (!mounted) return;
       setState(() {
         if (picked.length == 1) {
@@ -166,6 +139,44 @@ class _SendScreenState extends ConsumerState<SendScreen> {
     } finally {
       if (mounted) setState(() => _picking = false);
     }
+  }
+
+  /// Mobile file pick via `file_picker`. `withData: false` so the
+  /// plugin doesn't eagerly load bytes at pick time — the streaming
+  /// send (ADR-0013) reads the file on demand.
+  Future<List<PickedFile>> _pickFilesMobile() async {
+    final res = await FilePicker.platform.pickFiles(
+      withData: false,
+      allowMultiple: true,
+    );
+    if (res == null || res.files.isEmpty) return const [];
+    final picked = <PickedFile>[];
+    for (final f in res.files) {
+      if (f.path == null) {
+        throw _PickError('Could not read "${f.name}" — no path was returned.');
+      }
+      final int size;
+      try {
+        size = await File(f.path!).length();
+      } on Object catch (exc) {
+        throw _PickError('Could not stat "${f.name}": $exc');
+      }
+      final mime = lookupMimeType(f.name);
+      picked.add(
+        PickedFile(
+          source: FilePlaintextSource(
+            path: f.path!,
+            filename: f.name,
+            lengthBytes: size,
+            mimeType: mime,
+          ),
+          name: f.name,
+          mime: mime,
+          length: size,
+        ),
+      );
+    }
+    return picked;
   }
 
   Future<void> _lookupRecipient() async {
@@ -286,12 +297,7 @@ class _SendScreenState extends ConsumerState<SendScreen> {
       final result = await svc.send(
         mode: _mode,
         recipient: _mode == SendMode.app ? _recipient : null,
-        source: FilePlaintextSource(
-          path: file.path,
-          filename: file.name,
-          lengthBytes: file.length,
-          mimeType: file.mime,
-        ),
+        source: file.source,
         linkPassword:
             _mode == SendMode.link && linkPassword.isNotEmpty
                 ? linkPassword
@@ -1050,4 +1056,12 @@ class _BatchFilesSummary extends StatelessWidget {
       ),
     );
   }
+}
+
+/// User-facing pick failure. Thrown by [_pickFilesMobile] /
+/// [_pickFilesWeb] to short-circuit their loops with a message the
+/// send-screen surfaces via `_error`.
+class _PickError implements Exception {
+  const _PickError(this.message);
+  final String message;
 }

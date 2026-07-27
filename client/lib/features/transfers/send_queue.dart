@@ -2,7 +2,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../api/api_client.dart';
 import '../../api/users_api.dart';
-import '../../crypto/plaintext_source.dart';
 import '../auth/auth_providers.dart';
 import '../history/transfer_history_entry.dart';
 import '../history/transfer_history_provider.dart';
@@ -247,12 +246,7 @@ class SendQueueController extends Notifier<SendQueueState?> {
       final result = await svc.send(
         mode: SendMode.app,
         recipient: startSnapshot.recipient,
-        source: FilePlaintextSource(
-          path: file.path,
-          filename: file.name,
-          lengthBytes: file.length,
-          mimeType: file.mime,
-        ),
+        source: file.source,
         onProgress: (phase, done, total) {
           final snap = state;
           if (snap == null) return;
