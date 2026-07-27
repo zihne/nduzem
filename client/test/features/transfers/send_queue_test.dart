@@ -32,9 +32,14 @@ UserLookup _lookup() => UserLookup(
     );
 
 PickedFile _picked(String name, {int length = 4096}) => PickedFile(
+      source: FilePlaintextSource(
+        path: '/tmp/$name',
+        filename: name,
+        lengthBytes: length,
+        mimeType: 'application/octet-stream',
+      ),
       name: name,
       mime: 'application/octet-stream',
-      path: '/tmp/$name',
       length: length,
     );
 
