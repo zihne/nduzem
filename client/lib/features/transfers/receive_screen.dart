@@ -458,11 +458,13 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
                 decrypted: _decrypted!,
                 savedPath: _savedPath,
               ),
-              // Large-file banner only fires on iOS now — Android
+              // Large-file banner only fires on iOS today — Android
               // routes through the native SAF stream-save (ADR-0008)
               // and gets the same "pick where to save" UX regardless
-              // of file size.
-              if (!Platform.isAndroid &&
+              // of file size. Web save (FSA / `<a download>`) also
+              // handles any size natively — no banner needed.
+              if (!kIsWeb &&
+                  !Platform.isAndroid &&
                   _decrypted!.plaintextLength > _saveBytesWarnThreshold &&
                   _savedPath == null) ...[
                 const SizedBox(height: 12),

@@ -598,7 +598,9 @@ class _LinkReceiveScreenState extends ConsumerState<LinkReceiveScreen> {
       ),
       // iOS large-file heads-up: SAF isn't wired there yet, so the
       // save falls back to the app-docs dir (ADR-0010 open follow-up).
-      if (!Platform.isAndroid &&
+      // Web has FSA / `<a download>` — no size caveat there.
+      if (!kIsWeb &&
+          !Platform.isAndroid &&
           decrypted.plaintextLength > _saveBytesWarnThreshold &&
           _savedPath == null) ...[
         const SizedBox(height: 12),
