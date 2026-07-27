@@ -6,6 +6,7 @@ import '../../api/users_api.dart';
 import '../../crypto/fingerprint.dart';
 import '../auth/auth_providers.dart';
 import 'verified_contacts_repo.dart';
+import '../../widgets/max_width_content.dart';
 
 /// Two-stage screen (M2.5, spec §6):
 ///
@@ -79,7 +80,7 @@ class _VerifyContactScreenState extends ConsumerState<VerifyContactScreen> {
         setState(
           () => _error =
               'Server-computed fingerprint does not match what we compute '
-              'from the returned keys. Refusing to proceed.',
+                  'from the returned keys. Refusing to proceed.',
         );
         return;
       }
@@ -108,7 +109,7 @@ class _VerifyContactScreenState extends ConsumerState<VerifyContactScreen> {
       setState(
         () => _error =
             "The fingerprint you entered doesn't match what we computed "
-            'for this account. Compare again with the other person.',
+                'for this account. Compare again with the other person.',
       );
       return;
     }
@@ -129,7 +130,8 @@ class _VerifyContactScreenState extends ConsumerState<VerifyContactScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Verify a contact')),
-      body: Padding(
+      body: MaxWidthContent(
+          child: Padding(
         padding: const EdgeInsets.all(16),
         child: ListView(
           children: [
@@ -184,7 +186,8 @@ class _VerifyContactScreenState extends ConsumerState<VerifyContactScreen> {
                 ),
               ),
               const SizedBox(height: 8),
-              _PriorBanner(prior: _priorVerification, current: _foundFingerprint!),
+              _PriorBanner(
+                  prior: _priorVerification, current: _foundFingerprint!,),
               const SizedBox(height: 16),
               const Text(
                 'Ask the other person to read theirs to you (or paste it '
@@ -211,14 +214,14 @@ class _VerifyContactScreenState extends ConsumerState<VerifyContactScreen> {
                 Text(
                   "You're all set. If this counterparty's fingerprint ever "
                   'changes, the app will warn you before the next send.',
-                  style: TextStyle(color: Theme.of(context).colorScheme.primary),
+                  style:
+                      TextStyle(color: Theme.of(context).colorScheme.primary),
                 ),
               ],
             ],
-
           ],
         ),
-      ),
+      ),),
     );
   }
 }

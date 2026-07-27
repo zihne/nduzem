@@ -52,11 +52,16 @@ class TransfersApi {
     if (linkPassword != null) payload['link_password'] = linkPassword;
     if (recipientEmail != null) payload['recipient_email'] = recipientEmail;
 
-    final body = await _client.post(
-      '/v1/transfers/initiate',
-      authed: true,
-      body: payload,
-    );
+    final Map<String, dynamic> body;
+    try {
+      body = await _client.post(
+        '/v1/transfers/initiate',
+        authed: true,
+        body: payload,
+      );
+    } on ApiException catch (exc) {
+      throw _mapOversized(exc, declaredBytes: byteCount) ?? exc;
+    }
     final multipartJson = body['multipart'];
     MultipartUploadPlan? multipart;
     if (multipartJson != null) {
@@ -99,15 +104,46 @@ class TransfersApi {
         for (final p in parts) {'part_number': p.partNumber, 'etag': p.etag},
       ];
     }
-    final body = await _client.post(
-      '/v1/transfers/$transferId/commit',
-      authed: true,
-      body: payload,
-    );
+    final Map<String, dynamic> body;
+    try {
+      body = await _client.post(
+        '/v1/transfers/$transferId/commit',
+        authed: true,
+        body: payload,
+      );
+    } on ApiException catch (exc) {
+      // 413 at /commit is the "measured object size > per-transfer cap"
+      // path — a bypass-the-presign upload the server catches at
+      // commit time. Same friendlier surfacing as /initiate.
+      throw _mapOversized(exc, declaredBytes: null) ?? exc;
+    }
     return CommitTransferResponse(
       status: body['status'] as String,
       byteCount: (body['byte_count'] as num).toInt(),
     );
+  }
+
+  /// If [exc] looks like a per-transfer cap rejection (HTTP 413 from
+  /// `/initiate` or `/commit`), return an [OversizedTransferException]
+  /// carrying the parsed cap. Otherwise return null and the caller
+  /// re-throws the original exception verbatim.
+  ///
+  /// The server's message shape is
+  /// `byte_count exceeds per-transfer cap (<N>).` (initiate) or
+  /// `Measured object size exceeds per-transfer cap.` (commit). We
+  /// parse the number when present; on failure we fall back to
+  /// [declaredBytes] so the friendly message still shows a sensible
+  /// figure (the client knew what it tried to upload).
+  OversizedTransferException? _mapOversized(
+    ApiException exc, {
+    required int? declaredBytes,
+  }) {
+    if (exc.statusCode != 413) return null;
+    final match = RegExp(r'\((\d+)\)').firstMatch(exc.message);
+    final cap = match != null
+        ? int.tryParse(match.group(1)!) ?? declaredBytes ?? 0
+        : declaredBytes ?? 0;
+    return OversizedTransferException(capBytes: cap);
   }
 
   /// POST `/v1/transfers/{id}/abort` — client-initiated cleanup of an

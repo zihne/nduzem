@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../api/api_client.dart';
 import 'auth_providers.dart';
 import 'auth_repository.dart';
+import '../../widgets/max_width_content.dart';
 
 class TotpChallengeScreen extends ConsumerStatefulWidget {
   const TotpChallengeScreen({super.key, required this.mfaSession});
@@ -72,7 +73,8 @@ class _TotpChallengeScreenState extends ConsumerState<TotpChallengeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Second step')),
-      body: Padding(
+      body: MaxWidthContent(
+          child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -85,9 +87,8 @@ class _TotpChallengeScreenState extends ConsumerState<TotpChallengeScreen> {
             const SizedBox(height: 24),
             TextField(
               controller: _code,
-              keyboardType: _useRecovery
-                  ? TextInputType.text
-                  : TextInputType.number,
+              keyboardType:
+                  _useRecovery ? TextInputType.text : TextInputType.number,
               decoration: InputDecoration(
                 labelText: _useRecovery ? 'Recovery code' : 'TOTP code',
               ),
@@ -127,7 +128,7 @@ class _TotpChallengeScreenState extends ConsumerState<TotpChallengeScreen> {
             ],
           ],
         ),
-      ),
+      ),),
     );
   }
 }

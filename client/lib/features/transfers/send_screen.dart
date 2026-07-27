@@ -22,6 +22,7 @@ import 'picked_file.dart';
 import 'send_queue.dart';
 import 'transfer_service.dart';
 import 'web_file_picker.dart';
+import '../../widgets/max_width_content.dart';
 
 /// M2 send flow (spec §5.2). Three visible stages inside one screen:
 ///
@@ -207,8 +208,8 @@ class _SendScreenState extends ConsumerState<SendScreen> {
         setState(
           () => _error =
               'Server-computed fingerprint does not match what we compute '
-              'from the returned keys. Refusing to seal — this is the '
-              'exact case OOB verification catches.',
+                  'from the returned keys. Refusing to seal — this is the '
+                  'exact case OOB verification catches.',
         );
         return;
       }
@@ -219,8 +220,8 @@ class _SendScreenState extends ConsumerState<SendScreen> {
         setState(
           () => _error =
               "This contact's fingerprint has changed since you verified "
-              'them on ${prior.at.toLocal().toString().split('.').first}. '
-              'Re-verify at "Verify a contact" before sending.',
+                  'them on ${prior.at.toLocal().toString().split('.').first}. '
+                  'Re-verify at "Verify a contact" before sending.',
         );
         return;
       }
@@ -298,10 +299,9 @@ class _SendScreenState extends ConsumerState<SendScreen> {
         mode: _mode,
         recipient: _mode == SendMode.app ? _recipient : null,
         source: file.source,
-        linkPassword:
-            _mode == SendMode.link && linkPassword.isNotEmpty
-                ? linkPassword
-                : null,
+        linkPassword: _mode == SendMode.link && linkPassword.isNotEmpty
+            ? linkPassword
+            : null,
         maxDownloads: _mode == SendMode.link ? _maxDownloads : 1,
         onProgress: (phase, done, total) {
           if (!mounted) return;
@@ -327,10 +327,9 @@ class _SendScreenState extends ConsumerState<SendScreen> {
               recipientLabel: result.mode == SendMode.link
                   ? null
                   : (recipientLabel.isEmpty ? null : recipientLabel),
-              maxDownloads:
-                  result.mode == SendMode.link ? _maxDownloads : 1,
-              hasPassword: result.mode == SendMode.link &&
-                  linkPassword.isNotEmpty,
+              maxDownloads: result.mode == SendMode.link ? _maxDownloads : 1,
+              hasPassword:
+                  result.mode == SendMode.link && linkPassword.isNotEmpty,
             ),
           );
       if (!mounted) return;
@@ -408,6 +407,10 @@ class _SendScreenState extends ConsumerState<SendScreen> {
 
   void _cancelSend() {
     _cancel?.cancel();
+    // Trigger a rebuild so the button flips to "Cancelling…" before
+    // the send loop notices — the checkpoint is per-part / per-chunk
+    // and can lag the click by a couple of seconds.
+    if (mounted) setState(() {});
   }
 
   /// Whether the Send button should be enabled given the current state.
@@ -452,7 +455,8 @@ class _SendScreenState extends ConsumerState<SendScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Send a file')),
-      body: Padding(
+      body: MaxWidthContent(
+          child: Padding(
         padding: const EdgeInsets.all(16),
         child: ListView(
           children: [
@@ -631,9 +635,22 @@ class _SendScreenState extends ConsumerState<SendScreen> {
               ),
               const SizedBox(height: 12),
               OutlinedButton.icon(
-                onPressed: _cancelSend,
-                icon: const Icon(Icons.cancel),
-                label: const Text('Cancel'),
+                // Disable + re-label once the user has clicked once;
+                // the actual send loop can take a moment to notice
+                // (current part PUT / chunk read has to finish before
+                // the next cancel checkpoint fires).
+                onPressed:
+                    (_cancel?.isCancelled ?? false) ? null : _cancelSend,
+                icon: (_cancel?.isCancelled ?? false)
+                    ? const SizedBox(
+                        height: 16,
+                        width: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.cancel),
+                label: Text(
+                  (_cancel?.isCancelled ?? false) ? 'Cancelling…' : 'Cancel',
+                ),
               ),
             ] else
               FilledButton.icon(
@@ -668,11 +685,10 @@ class _SendScreenState extends ConsumerState<SendScreen> {
             ],
           ],
         ),
-      ),
+      ),),
     );
   }
 }
-
 
 /// Modal acknowledgement after a successful send. `barrierDismissible:
 /// false` at the caller ensures the user has to tap Done — otherwise a

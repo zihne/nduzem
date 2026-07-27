@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../api/api_client.dart';
 import '../../widgets/password_form_field.dart';
 import 'auth_providers.dart';
+import '../../widgets/max_width_content.dart';
 
 /// Phase 2 of the M1.7 password-reset flow: the user tapped the reset
 /// link from their email; the router routed us here with `user_id` and
@@ -81,7 +82,8 @@ class _PasswordResetConfirmScreenState
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Choose a new password')),
-      body: Padding(
+      body: MaxWidthContent(
+          child: Padding(
         padding: const EdgeInsets.all(16),
         child: Form(
           key: _form,
@@ -136,7 +138,7 @@ class _PasswordResetConfirmScreenState
             ],
           ),
         ),
-      ),
+      ),),
     );
   }
 }

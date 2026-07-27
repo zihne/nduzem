@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'transfer_history_entry.dart';
 import 'transfer_history_provider.dart';
+import '../../widgets/max_width_content.dart';
 
 /// Chronological list of local transfer history (ADR-0007).
 ///
@@ -32,7 +33,8 @@ class TransferHistoryScreen extends ConsumerWidget {
           ),
         ],
       ),
-      body: async.when(
+      body: MaxWidthContent(
+          child: async.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (err, _) => Padding(
           padding: const EdgeInsets.all(16),
@@ -48,7 +50,7 @@ class TransferHistoryScreen extends ConsumerWidget {
             itemBuilder: (context, i) => _HistoryTile(entry: entries[i]),
           );
         },
-      ),
+      ),),
     );
   }
 

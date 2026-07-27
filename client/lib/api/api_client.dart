@@ -65,6 +65,47 @@ class QuotaExceededException extends ApiException {
       'sub_remaining=${subRemainingMb}MiB, credit=${creditMb}MiB)';
 }
 
+/// Server rejected the transfer because it's above the per-transfer
+/// byte cap (`settings.transfer_max_bytes`). Surfaces from
+/// `/transfers/initiate` (declared byte_count > cap) and from
+/// `/transfers/{id}/commit` (measured object size > cap; a rare
+/// bypass-the-presign case).
+///
+/// Subclass of [ApiException] so blanket `on ApiException` catches
+/// still work; screens that want a dedicated "file too large" panel
+/// can type-check for this class. The `.message` is user-facing.
+class OversizedTransferException extends ApiException {
+  OversizedTransferException({required this.capBytes})
+      : super(
+          statusCode: 413,
+          message:
+              'This file is too large. The current per-transfer cap is '
+              '${_prettyBytes(capBytes)}. Try splitting the file, or get in '
+              'touch if you need a higher limit.',
+        );
+
+  /// Cap the server reported, in bytes. Screens can use this to size
+  /// a "split into N parts of ~X MiB" suggestion if they want.
+  final int capBytes;
+}
+
+String _prettyBytes(int bytes) {
+  if (bytes < 1024) return '$bytes B';
+  const units = ['KiB', 'MiB', 'GiB', 'TiB'];
+  var value = bytes / 1024;
+  var idx = 0;
+  while (value >= 1024 && idx < units.length - 1) {
+    value /= 1024;
+    idx++;
+  }
+  final rounded = value >= 100
+      ? value.toStringAsFixed(0)
+      : value >= 10
+          ? value.toStringAsFixed(1)
+          : value.toStringAsFixed(2);
+  return '$rounded ${units[idx]}';
+}
+
 /// Network was unreachable — DNS failure, connection refused, TLS
 /// reset, timeout, etc. Subclass of [ApiException] so existing catch
 /// blocks pick up the friendly `.message` automatically; callers who

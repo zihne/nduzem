@@ -13,6 +13,7 @@ import '../history/transfer_history_entry.dart';
 import '../history/transfer_history_provider.dart';
 import 'transfer_service.dart';
 import 'web_saver.dart';
+import '../../widgets/max_width_content.dart';
 
 /// Four-stage flow (spec §5.3), post-M4 streaming (ADR-0006):
 ///
@@ -145,6 +146,10 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
 
   void _cancelDownload() {
     _cancel?.cancel();
+    // See send_screen — flip the button to "Cancelling…" immediately
+    // so the user gets feedback while the receive loop's next
+    // checkpoint fires.
+    if (mounted) setState(() {});
   }
 
   Future<void> _saveAs() async {
@@ -400,7 +405,8 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Receive')),
-      body: Padding(
+      body: MaxWidthContent(
+          child: Padding(
         padding: const EdgeInsets.all(16),
         child: ListView(
           children: [
@@ -419,9 +425,21 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
                 ),
                 const SizedBox(height: 12),
                 OutlinedButton.icon(
-                  onPressed: _cancelDownload,
-                  icon: const Icon(Icons.cancel),
-                  label: const Text('Cancel'),
+                  // See send_screen for the "Cancelling…" pattern —
+                  // the download's chunk / part loop needs a moment
+                  // to notice the flag.
+                  onPressed:
+                      (_cancel?.isCancelled ?? false) ? null : _cancelDownload,
+                  icon: (_cancel?.isCancelled ?? false)
+                      ? const SizedBox(
+                          height: 16,
+                          width: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.cancel),
+                  label: Text(
+                    (_cancel?.isCancelled ?? false) ? 'Cancelling…' : 'Cancel',
+                  ),
                 ),
               ] else
                 FilledButton.icon(
@@ -501,7 +519,6 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
                 ),
               ],
             ],
-
             if (_error != null) ...[
               const SizedBox(height: 16),
               Text(
@@ -511,7 +528,7 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
             ],
           ],
         ),
-      ),
+      ),),
     );
   }
 }

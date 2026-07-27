@@ -8,6 +8,7 @@ import '../../api/api_client.dart';
 import '../../api/auth_api.dart';
 import '../../core/external_launcher.dart';
 import 'auth_providers.dart';
+import '../../widgets/max_width_content.dart';
 
 /// Three-stage flow, matching the server contract (M1.6):
 ///
@@ -125,7 +126,8 @@ class _TotpEnrollScreenState extends ConsumerState<TotpEnrollScreen> {
     final enrolment = _enrollment;
     return Scaffold(
       appBar: AppBar(title: const Text('Enable 2FA')),
-      body: Padding(
+      body: MaxWidthContent(
+          child: Padding(
         padding: const EdgeInsets.all(16),
         child: enrolment == null
             ? Center(
@@ -235,7 +237,7 @@ class _TotpEnrollScreenState extends ConsumerState<TotpEnrollScreen> {
                   ],
                 ],
               ),
-      ),
+      ),),
     );
   }
 }
@@ -255,7 +257,8 @@ class _RecoveryCodesView extends StatelessWidget {
         title: const Text('Save your recovery codes'),
         automaticallyImplyLeading: false,
       ),
-      body: Padding(
+      body: MaxWidthContent(
+          child: Padding(
         padding: const EdgeInsets.all(16),
         child: ListView(
           children: [
@@ -294,7 +297,7 @@ class _RecoveryCodesView extends StatelessWidget {
             ),
           ],
         ),
-      ),
+      ),),
     );
   }
 }

@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../api/api_client.dart';
 import 'auth_providers.dart';
+import '../../widgets/max_width_content.dart';
 
 /// Phase 1 of the M1.7 password-reset flow: the user types the email
 /// they registered with; the server responds with a generic
@@ -56,7 +57,8 @@ class _PasswordResetRequestScreenState
     if (_sent) {
       return Scaffold(
         appBar: AppBar(title: const Text('Reset password')),
-        body: Padding(
+        body: MaxWidthContent(
+            child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -73,12 +75,13 @@ class _PasswordResetRequestScreenState
               ),
             ],
           ),
-        ),
+        ),),
       );
     }
     return Scaffold(
       appBar: AppBar(title: const Text('Reset password')),
-      body: Padding(
+      body: MaxWidthContent(
+          child: Padding(
         padding: const EdgeInsets.all(16),
         child: Form(
           key: _form,
@@ -125,7 +128,7 @@ class _PasswordResetRequestScreenState
             ],
           ),
         ),
-      ),
+      ),),
     );
   }
 }
