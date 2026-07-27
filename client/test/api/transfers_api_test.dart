@@ -18,7 +18,7 @@ void main() {
   });
 
   group('/v1/transfers/initiate', () {
-    test('posts the app-mode envelope shape', () async {
+    test('posts the app-mode envelope shape (ADR-0014)', () async {
       when(
         () => client.post(any(), body: any(named: 'body'), authed: any(named: 'authed')),
       ).thenAnswer(
@@ -33,10 +33,6 @@ void main() {
         mode: 'app',
         recipientId: 'u-42',
         byteCount: 1024,
-        blobSha256Hex: 'a' * 64,
-        wrappedKeyB64: 'WK',
-        encHeaderB64: 'EH',
-        signatureB64: 'SIG',
       );
 
       final captured = verify(
@@ -49,12 +45,14 @@ void main() {
       expect(captured['mode'], 'app');
       expect(captured['recipient_id'], 'u-42');
       expect(captured['byte_count'], 1024);
-      expect(captured['blob_sha256'], 'a' * 64);
-      expect(captured['wrapped_key'], 'WK');
-      expect(captured['enc_header'], 'EH');
-      expect(captured['signature'], 'SIG');
       expect(captured['crypto_suite'], 1);
       expect(captured['max_downloads'], 1);
+      // ADR-0014: crypto metadata is NOT sent at initiate anymore —
+      // it lands at /commit once the streaming pipeline drains.
+      expect(captured.containsKey('blob_sha256'), isFalse);
+      expect(captured.containsKey('wrapped_key'), isFalse);
+      expect(captured.containsKey('enc_header'), isFalse);
+      expect(captured.containsKey('signature'), isFalse);
       expect(res.transferId, 't-1');
       expect(res.storageKey, 'obj/abc');
       expect(res.uploadUrl, startsWith('https://'));
@@ -74,10 +72,6 @@ void main() {
         mode: 'app',
         recipientId: 'u-42',
         byteCount: 1024,
-        blobSha256Hex: 'a' * 64,
-        wrappedKeyB64: 'WK',
-        encHeaderB64: 'EH',
-        signatureB64: 'SIG',
       );
       expect(res.uploadUrl, isNotNull);
       expect(res.multipart, isNull);
@@ -104,10 +98,6 @@ void main() {
         mode: 'app',
         recipientId: 'u-42',
         byteCount: 12000000,
-        blobSha256Hex: 'b' * 64,
-        wrappedKeyB64: 'WK',
-        encHeaderB64: 'EH',
-        signatureB64: 'SIG',
       );
       expect(res.uploadUrl, isNull);
       expect(res.multipart, isNotNull);
@@ -137,9 +127,6 @@ void main() {
       await api.initiate(
         mode: 'link',
         byteCount: 1024,
-        blobSha256Hex: 'c' * 64,
-        encHeaderB64: 'EH',
-        signatureB64: 'SIG',
         linkPassword: 'hunter2',
         maxDownloads: 3,
       );
@@ -154,9 +141,6 @@ void main() {
       expect(captured['mode'], 'link');
       expect(captured['link_password'], 'hunter2');
       expect(captured['max_downloads'], 3);
-      // Server treats missing recipient_id / wrapped_key as
-      // "link-mode is not sealed to anyone" — critical for the mode
-      // dispatch to work, so we assert absence explicitly.
       expect(captured.containsKey('recipient_id'), isFalse);
       expect(captured.containsKey('wrapped_key'), isFalse);
       expect(captured.containsKey('recipient_email'), isFalse);
@@ -177,13 +161,7 @@ void main() {
         },
       );
 
-      await api.initiate(
-        mode: 'link',
-        byteCount: 1024,
-        blobSha256Hex: 'c' * 64,
-        encHeaderB64: 'EH',
-        signatureB64: 'SIG',
-      );
+      await api.initiate(mode: 'link', byteCount: 1024);
 
       final captured = verify(
         () => client.post(
@@ -200,8 +178,8 @@ void main() {
     });
   });
 
-  group('/v1/transfers/{id}/commit', () {
-    test('single-shot commit sends no body (M2 wire compat)', () async {
+  group('/v1/transfers/{id}/commit (ADR-0014)', () {
+    test('single-shot app-mode commit carries all 4 metadata fields', () async {
       when(
         () => client.post(
           any(),
@@ -211,18 +189,55 @@ void main() {
       ).thenAnswer(
         (_) async => <String, dynamic>{'status': 'uploaded', 'byte_count': 1024},
       );
-      await api.commit('t-1');
+      await api.commit(
+        't-1',
+        blobSha256Hex: 'a' * 64,
+        encHeaderB64: 'EH',
+        signatureB64: 'SIG',
+        wrappedKeyB64: 'WK',
+      );
       final captured = verify(
         () => client.post(
           '/v1/transfers/t-1/commit',
           body: captureAny(named: 'body'),
           authed: any(named: 'authed'),
         ),
-      ).captured.single;
-      expect(captured, isNull);
+      ).captured.single as Map<String, dynamic>;
+      expect(captured['blob_sha256'], 'a' * 64);
+      expect(captured['enc_header'], 'EH');
+      expect(captured['signature'], 'SIG');
+      expect(captured['wrapped_key'], 'WK');
+      expect(captured.containsKey('parts'), isFalse);
     });
 
-    test('multipart commit sends parts list with ETags', () async {
+    test('link-mode commit omits wrapped_key (server rejects if present)',
+        () async {
+      when(
+        () => client.post(
+          any(),
+          body: any(named: 'body'),
+          authed: any(named: 'authed'),
+        ),
+      ).thenAnswer(
+        (_) async => <String, dynamic>{'status': 'uploaded', 'byte_count': 1024},
+      );
+      await api.commit(
+        't-link',
+        blobSha256Hex: 'b' * 64,
+        encHeaderB64: 'EH',
+        signatureB64: 'SIG',
+      );
+      final captured = verify(
+        () => client.post(
+          '/v1/transfers/t-link/commit',
+          body: captureAny(named: 'body'),
+          authed: any(named: 'authed'),
+        ),
+      ).captured.single as Map<String, dynamic>;
+      expect(captured.containsKey('wrapped_key'), isFalse);
+    });
+
+    test('multipart commit sends parts list with ETags + metadata', () async {
       when(
         () => client.post(
           any(),
@@ -235,6 +250,10 @@ void main() {
       );
       await api.commit(
         't-2',
+        blobSha256Hex: 'c' * 64,
+        encHeaderB64: 'EH',
+        signatureB64: 'SIG',
+        wrappedKeyB64: 'WK',
         parts: const [
           CommitPart(partNumber: 1, etag: 'aaaa'),
           CommitPart(partNumber: 2, etag: 'bbbb'),
@@ -250,6 +269,7 @@ void main() {
       expect(captured['parts'], hasLength(2));
       expect((captured['parts'] as List)[0], {'part_number': 1, 'etag': 'aaaa'});
       expect((captured['parts'] as List)[1], {'part_number': 2, 'etag': 'bbbb'});
+      expect(captured['blob_sha256'], 'c' * 64);
     });
   });
 

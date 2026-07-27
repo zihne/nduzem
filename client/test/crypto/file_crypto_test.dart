@@ -120,139 +120,10 @@ void main() {
     );
   });
 
-  // --- streaming send from disk (ADR-0004) --------------------------------
-
-  test(
-    'encryptFileToTempFile: multi-chunk file roundtrips via in-memory decrypt',
-    () async {
-      if (skipReason != null) return;
-      final tempDir = await Directory.systemTemp.createTemp('opq-test-');
-      try {
-        final key = fc!.generateFileKey();
-        // ~3 chunks + tail so we exercise the multi-chunk path.
-        final plain = Uint8List.fromList(
-          List<int>.generate(
-            FileCrypto.plaintextChunkBytes * 3 + 7777,
-            (i) => (i * 17 + 3) & 0xff,
-          ),
-        );
-        final source = File('${tempDir.path}/source.bin');
-        await source.writeAsBytes(plain);
-
-        int lastDone = -1;
-        int lastTotal = -1;
-        final result = await fc!.encryptFileToTempFile(
-          source: await FilePlaintextSource.fromPath(source.path),
-          key: key,
-          tempDir: tempDir,
-          onProgress: (done, total) {
-            lastDone = done;
-            lastTotal = total;
-          },
-        );
-
-        // Progress fired and ended at 100 %.
-        expect(lastTotal, plain.length);
-        expect(lastDone, plain.length);
-
-        // Blob SHA-256 matches sha256(ciphertext file).
-        final ct = await File(result.ciphertextPath).readAsBytes();
-        expect(ct.length, result.ciphertextLength);
-        expect(
-          dart_crypto.sha256.convert(ct).toString(),
-          result.blobSha256Hex,
-        );
-
-        // The ciphertext is a valid OS4S container — the in-memory
-        // decrypt reads it back byte-for-byte to the original plaintext.
-        final decrypted =
-            await fc!.decryptFile(ciphertextBlob: ct, key: key);
-        expect(decrypted, plain);
-      } finally {
-        if (await tempDir.exists()) {
-          await tempDir.delete(recursive: true);
-        }
-      }
-    },
-  );
-
-  test(
-    'encryptFileToTempFile: cancel mid-encrypt deletes the partial temp file',
-    () async {
-      if (skipReason != null) return;
-      final tempDir = await Directory.systemTemp.createTemp('opq-test-');
-      try {
-        final key = fc!.generateFileKey();
-        final plain = Uint8List.fromList(
-          List<int>.generate(
-            FileCrypto.plaintextChunkBytes * 5,
-            (i) => i & 0xff,
-          ),
-        );
-        final source = File('${tempDir.path}/source.bin');
-        await source.writeAsBytes(plain);
-
-        var callCount = 0;
-        void throwOnThirdCall() {
-          callCount++;
-          if (callCount >= 3) {
-            throw const _TestCancelled();
-          }
-        }
-
-        await expectLater(
-          fc!.encryptFileToTempFile(
-            source: await FilePlaintextSource.fromPath(source.path),
-            key: key,
-            tempDir: tempDir,
-            throwIfCancelled: throwOnThirdCall,
-          ),
-          throwsA(isA<_TestCancelled>()),
-        );
-
-        // Cleanup contract: no `.enc.tmp` files left behind after
-        // a mid-encrypt failure.
-        final leftovers = tempDir
-            .listSync()
-            .where((e) => e.path.endsWith('.enc.tmp'))
-            .toList();
-        expect(leftovers, isEmpty);
-      } finally {
-        if (await tempDir.exists()) {
-          await tempDir.delete(recursive: true);
-        }
-      }
-    },
-  );
-
-  test('encryptFileToTempFile: empty plaintext file still roundtrips',
-      () async {
-    if (skipReason != null) return;
-    final tempDir = await Directory.systemTemp.createTemp('opq-test-');
-    try {
-      final key = fc!.generateFileKey();
-      final source = File('${tempDir.path}/source.bin');
-      await source.writeAsBytes(<int>[]);
-
-      final result = await fc!.encryptFileToTempFile(
-        source: await FilePlaintextSource.fromPath(source.path),
-        key: key,
-        tempDir: tempDir,
-      );
-      final ct = await File(result.ciphertextPath).readAsBytes();
-      final decrypted = await fc!.decryptFile(ciphertextBlob: ct, key: key);
-      expect(decrypted.length, 0);
-    } finally {
-      if (await tempDir.exists()) {
-        await tempDir.delete(recursive: true);
-      }
-    }
-  });
-
   // --- streaming receive (ADR-0006) --------------------------------------
 
   test(
-    'decryptFileToTempFile: multi-chunk file roundtrips via streaming encrypt',
+    'decryptFileToTempFile: multi-chunk file roundtrips via in-memory encrypt',
     () async {
       if (skipReason != null) return;
       final tempDir = await Directory.systemTemp.createTemp('opq-test-');
@@ -265,19 +136,14 @@ void main() {
             (i) => (i * 91 + 7) & 0xff,
           ),
         );
-        final source = File('${tempDir.path}/source.bin');
-        await source.writeAsBytes(plain);
-
-        final enc = await fc!.encryptFileToTempFile(
-          source: await FilePlaintextSource.fromPath(source.path),
-          key: key,
-          tempDir: tempDir,
-        );
+        final ct = await fc!.encryptFile(plaintext: plain, key: key);
+        final ctFile = File('${tempDir.path}/ct.bin');
+        await ctFile.writeAsBytes(ct);
 
         int lastDone = -1;
         int lastTotal = -1;
         final dec = await fc!.decryptFileToTempFile(
-          ciphertextPath: enc.ciphertextPath,
+          ciphertextPath: ctFile.path,
           key: key,
           tempDir: tempDir,
           onProgress: (done, total) {
@@ -287,8 +153,8 @@ void main() {
         );
 
         expect(dec.plaintextLength, plain.length);
-        expect(lastTotal, enc.ciphertextLength);
-        expect(lastDone, enc.ciphertextLength);
+        expect(lastTotal, ct.length);
+        expect(lastDone, ct.length);
 
         final gotBytes = await File(dec.plaintextPath).readAsBytes();
         expect(gotBytes, plain);
@@ -382,13 +248,9 @@ void main() {
             (i) => i & 0xff,
           ),
         );
-        final source = File('${tempDir.path}/source.bin');
-        await source.writeAsBytes(plain);
-        final enc = await fc!.encryptFileToTempFile(
-          source: await FilePlaintextSource.fromPath(source.path),
-          key: key,
-          tempDir: tempDir,
-        );
+        final ct = await fc!.encryptFile(plaintext: plain, key: key);
+        final ctFile = File('${tempDir.path}/ct.bin');
+        await ctFile.writeAsBytes(ct);
 
         var callCount = 0;
         void throwOnThirdCall() {
@@ -400,7 +262,7 @@ void main() {
 
         await expectLater(
           fc!.decryptFileToTempFile(
-            ciphertextPath: enc.ciphertextPath,
+            ciphertextPath: ctFile.path,
             key: key,
             tempDir: tempDir,
             throwIfCancelled: throwOnThirdCall,
@@ -442,66 +304,56 @@ void main() {
     }
 
     test(
-      'semantic-equivalence with encryptFileToTempFile: same plaintext '
-      'after decrypt, same ciphertext length, valid blob_sha256',
+      'estimateCiphertextLength matches actual ciphertext length across '
+      'sizes (empty / sub-chunk / chunk boundary / multi-chunk + tail)',
       () async {
         if (skipReason != null) return;
-        final tempDir = await Directory.systemTemp.createTemp('opq-stream-eq-');
-        try {
+        // Boundary values: empty, sub-chunk, chunk-1, chunk exact,
+        // chunk+1, several chunks + tail. All must match the estimator
+        // so /initiate byte_count === actual ciphertext byte_count.
+        final sizes = <int>[
+          0,
+          1,
+          1024,
+          FileCrypto.plaintextChunkBytes - 1,
+          FileCrypto.plaintextChunkBytes,
+          FileCrypto.plaintextChunkBytes + 1,
+          FileCrypto.plaintextChunkBytes * 3 + 4321,
+        ];
+        for (final size in sizes) {
           final key = fc!.generateFileKey();
           final plain = Uint8List.fromList(
-            List<int>.generate(
-              FileCrypto.plaintextChunkBytes * 3 + 4321,
-              (i) => (i * 17 + 5) & 0xff,
-            ),
+            List<int>.generate(size, (i) => (i * 17 + 5) & 0xff),
           );
-          final sourceFile = File('${tempDir.path}/plain.bin')
-            ..writeAsBytesSync(plain);
-
-          // Path A: temp-file variant (existing, mobile prod path).
-          final tempResult = await fc!.encryptFileToTempFile(
-            source: await FilePlaintextSource.fromPath(sourceFile.path),
-            key: key,
-            tempDir: tempDir,
-          );
-          final tempCiphertext =
-              await File(tempResult.ciphertextPath).readAsBytes();
-
-          // Path B: streaming variant (new).
           final handle = fc!.encryptToStream(
-            source: await FilePlaintextSource.fromPath(sourceFile.path),
+            source: BytesPlaintextSource(
+              bytes: plain,
+              filename: 'x.bin',
+              mimeType: null,
+            ),
             key: key,
           );
-          final (streamCiphertext, streamSummary) = await drain(handle);
-
-          // Ciphertext lengths match — deterministic secretstream
-          // overhead given the same plaintext length.
-          expect(streamCiphertext.length, tempCiphertext.length);
-          expect(streamSummary.ciphertextLength, tempResult.ciphertextLength);
-
-          // Each path's ciphertext SELF-consistent (summary hash
-          // matches sha256 of that path's own emitted bytes).
+          final (ciphertext, summary) = await drain(handle);
+          final estimated = fc!.estimateCiphertextLength(size);
           expect(
-            streamSummary.blobSha256Hex,
-            dart_crypto.sha256.convert(streamCiphertext).toString(),
+            ciphertext.length,
+            estimated,
+            reason: 'ciphertext length mismatch at plaintext size $size',
           );
           expect(
-            tempResult.blobSha256Hex,
-            dart_crypto.sha256.convert(tempCiphertext).toString(),
+            summary.ciphertextLength,
+            estimated,
+            reason: 'summary length mismatch at plaintext size $size',
           );
-
-          // Semantic equivalence: BOTH ciphertexts decrypt to the
-          // original plaintext. Byte-equivalence between them is
-          // impossible because sodium's init_push chooses a random
-          // header per encryption — that's the point.
-          final decryptedA =
-              await fc!.decryptFile(ciphertextBlob: tempCiphertext, key: key);
-          final decryptedB =
-              await fc!.decryptFile(ciphertextBlob: streamCiphertext, key: key);
-          expect(decryptedA, plain);
-          expect(decryptedB, plain);
-        } finally {
-          if (await tempDir.exists()) await tempDir.delete(recursive: true);
+          expect(
+            summary.blobSha256Hex,
+            dart_crypto.sha256.convert(ciphertext).toString(),
+            reason: 'blob_sha256 mismatch at plaintext size $size',
+          );
+          // Roundtrip: encrypted stream still decrypts to plaintext.
+          final decrypted =
+              await fc!.decryptFile(ciphertextBlob: ciphertext, key: key);
+          expect(decrypted, plain, reason: 'roundtrip fail at size $size');
         }
       },
     );

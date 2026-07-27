@@ -57,6 +57,30 @@ class FileCrypto {
   int get ciphertextChunkBytes =>
       plaintextChunkBytes + _sodium.crypto.secretStream.aBytes;
 
+  /// Deterministic ciphertext length for a plaintext of `plaintextLen`
+  /// bytes, matching what [encryptToStream] will emit for the same
+  /// input (ADR-0014).
+  ///
+  /// Needed at `/initiate` time so the server can size the multipart
+  /// plan (part count, per-part URLs) BEFORE the client has actually
+  /// encrypted anything — the real ciphertext hash + length are only
+  /// known once the streaming encryption pipeline drains. Server
+  /// re-measures the object at `/commit` and rejects on mismatch, so
+  /// an incorrect estimate is caught then, not silently.
+  ///
+  /// Formula: `magicPrefix(4) + secretstream_header(24) + plaintextLen
+  /// + chunkCount * aBytes(17)`, where `chunkCount` matches
+  /// [`_plainStream`]'s emission pattern: one empty final chunk for
+  /// empty plaintext, otherwise `ceil(plaintextLen / plaintextChunkBytes)`.
+  int estimateCiphertextLength(int plaintextLen) {
+    final aBytes = _sodium.crypto.secretStream.aBytes;
+    final headerBytes = _sodium.crypto.secretStream.headerBytes;
+    final chunkCount = plaintextLen == 0
+        ? 1
+        : (plaintextLen + plaintextChunkBytes - 1) ~/ plaintextChunkBytes;
+    return magicPrefix.length + headerBytes + plaintextLen + chunkCount * aBytes;
+  }
+
   /// Encrypt `plaintext` into the OS4S container. The whole plaintext
   /// and the resulting ciphertext are held in memory — see the class
   /// docstring for the memory-model caveat.
@@ -187,138 +211,14 @@ class FileCrypto {
   String sha256Hex(Uint8List bytes) =>
       dart_crypto.sha256.convert(bytes).toString();
 
-  /// Stream-encrypt `source` into a fresh temp file, computing
-  /// `blob_sha256` incrementally as ciphertext chunks are produced
-  /// (ADR-0004, ADR-0013).
-  ///
-  /// Peak memory: ~one 64 KiB secretstream chunk + stream I/O
-  /// overhead. Zero copies of the plaintext or the ciphertext held
-  /// whole. Callers upload the resulting temp file part-by-part via
-  /// [File.open]+[RandomAccessFile.read], keeping upload memory
-  /// bounded to `part_size`.
-  ///
-  /// The temp file lives in `tempDir` (or `Directory.systemTemp` when
-  /// none is provided — production wiring passes
-  /// `path_provider.getTemporaryDirectory()`). The caller is
-  /// responsible for deleting it after the send completes / aborts.
-  ///
-  /// `onProgress` fires per plaintext-read chunk with
-  /// `(plaintextBytesRead, totalPlaintextBytes)`. `cancel` is checked
-  /// per read chunk; on trip the stream terminates, the partial temp
-  /// file is deleted, and `SendCancelledException`-shaped state
-  /// propagates via the underlying stream error.
-  Future<EncryptedFileResult> encryptFileToTempFile({
-    required PlaintextSource source,
-    required Uint8List key,
-    Directory? tempDir,
-    void Function(int done, int total)? onProgress,
-    void Function()? throwIfCancelled,
-  }) async {
-    final tmpDir = tempDir ?? Directory.systemTemp;
-    if (!await tmpDir.exists()) {
-      await tmpDir.create(recursive: true);
-    }
-    final totalBytes = source.lengthBytes;
-    final tempFile = File(
-      '${tmpDir.path}/opaqueshare-${_randomId()}.enc.tmp',
-    );
-
-    final secret = SecureKey.fromList(_sodium, key);
-    dart_crypto.Digest? digest;
-    final digestSink = ChunkedConversionSink<dart_crypto.Digest>.withCallback(
-      (digests) => digest = digests.single,
-    );
-    final hasher = dart_crypto.sha256.startChunkedConversion(digestSink);
-    final sink = tempFile.openWrite();
-
-    var ciphertextLength = 0;
-    try {
-      sink.add(magicPrefix);
-      hasher.add(magicPrefix);
-      ciphertextLength += magicPrefix.length;
-
-      // Throttle the progress callback: `File.openRead()` emits ~64 KiB
-      // chunks by default, so on a multi-GB file we'd fire onProgress
-      // several thousand times per second. That's not free — each call
-      // marks the UI dirty. Emit at most every ~250 ms plus a
-      // guaranteed final 100 % tick when the read completes.
-      var plaintextRead = 0;
-      var lastEmitAt = DateTime.now();
-      const emitEvery = Duration(milliseconds: 250);
-      final plaintextStream = source.openRead().map<List<int>>((chunk) {
-        // Note: `source.openRead()` returns platform-defined chunks
-        // (OS-scheduled ~64 KiB on mobile; Blob slice window on web).
-        // The sodium `pushChunked` below re-chunks to `plaintextChunkBytes`.
-        throwIfCancelled?.call();
-        plaintextRead += chunk.length;
-        final now = DateTime.now();
-        final done = plaintextRead == totalBytes;
-        if (done || now.difference(lastEmitAt) >= emitEvery) {
-          lastEmitAt = now;
-          onProgress?.call(plaintextRead, totalBytes);
-        }
-        return chunk;
-      });
-
-      final ciphertextStream = _sodium.crypto.secretStream.pushChunked(
-        messageStream: plaintextStream,
-        key: secret,
-        chunkSize: plaintextChunkBytes,
-      );
-
-      await for (final chunk in ciphertextStream) {
-        sink.add(chunk);
-        hasher.add(chunk);
-        ciphertextLength += chunk.length;
-      }
-
-      await sink.flush();
-      await sink.close();
-      hasher.close();
-
-      final finalDigest = digest;
-      if (finalDigest == null) {
-        // Defensive — the chunked conversion should always emit
-        // exactly one digest on close.
-        throw StateError('sha256 sink closed without emitting a digest');
-      }
-      return EncryptedFileResult(
-        ciphertextPath: tempFile.path,
-        ciphertextLength: ciphertextLength,
-        blobSha256Hex: finalDigest.toString(),
-      );
-    } on Object {
-      // Best-effort teardown: close any half-open sink, delete the
-      // partial temp file. Rethrow the original error so the caller
-      // sees the real cause (cancel, disk full, sodium failure, …).
-      try {
-        await sink.close();
-      } on Object {
-        // ignore
-      }
-      try {
-        if (await tempFile.exists()) {
-          await tempFile.delete();
-        }
-      } on Object {
-        // ignore
-      }
-      rethrow;
-    } finally {
-      secret.dispose();
-    }
-  }
-
   /// Stream-encrypt `source` and return the ciphertext AS A STREAM
   /// of `Uint8List` chunks — no temp file (ADR-0013 Phase 2).
   ///
-  /// This is the platform-neutral counterpart to
-  /// [encryptFileToTempFile]. Both produce a valid OS4S container
-  /// that decrypts to the same plaintext; both use the same 64 KiB
-  /// secretstream chunking. The only differences are:
+  /// This is the single send-path encryption API on all platforms.
+  /// The output is a valid OS4S container using the same 64 KiB
+  /// secretstream chunking as the receive side.
   ///
-  ///   - **Output shape**: chunks emitted on a `Stream<Uint8List>`
-  ///     instead of written to a temp file at `ciphertextPath`.
+  ///   - **Output shape**: chunks emitted on a `Stream<Uint8List>`.
   ///   - **Summary delivery**: `blobSha256Hex` + `ciphertextLength`
   ///     are only known after the stream drains, so they're
   ///     delivered via the [EncryptStreamHandle.done] Future which
@@ -384,7 +284,7 @@ class FileCrypto {
     final hasher = dart_crypto.sha256.startChunkedConversion(digestSink);
     var ciphertextLength = 0;
 
-    // Progress throttle — same shape as encryptFileToTempFile.
+    // Progress throttle — see the docstring above for rationale.
     var plaintextRead = 0;
     var lastEmitAt = DateTime.now();
     const emitEvery = Duration(milliseconds: 250);
@@ -444,9 +344,8 @@ class FileCrypto {
   }
 
   /// Stream-decrypt `ciphertextPath` into a fresh plaintext temp file
-  /// (ADR-0006). Mirror of [encryptFileToTempFile] on the receive
-  /// side. Peak memory: ~one 64 KiB secretstream chunk + stream I/O
-  /// overhead — no copies of the plaintext or ciphertext held whole.
+  /// (ADR-0006). Peak memory: ~one 64 KiB secretstream chunk + stream
+  /// I/O overhead — no copies of the plaintext or ciphertext held whole.
   ///
   /// The caller is responsible for deleting the returned plaintext
   /// temp file after the recipient has saved or acked the transfer.
@@ -649,20 +548,6 @@ class EncryptSummary {
   });
   final String blobSha256Hex;
   final int ciphertextLength;
-}
-
-/// Result of [FileCrypto.encryptFileToTempFile]. The caller uploads
-/// `ciphertextPath` in `part_size` chunks (or single-shot for small
-/// files) and MUST delete the file when done — success or failure.
-class EncryptedFileResult {
-  const EncryptedFileResult({
-    required this.ciphertextPath,
-    required this.ciphertextLength,
-    required this.blobSha256Hex,
-  });
-  final String ciphertextPath;
-  final int ciphertextLength;
-  final String blobSha256Hex;
 }
 
 /// Result of [FileCrypto.decryptFileToTempFile] (ADR-0006). The caller
