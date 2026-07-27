@@ -120,166 +120,135 @@ void main() {
     );
   });
 
-  // --- streaming receive (ADR-0006) --------------------------------------
+  // --- streaming receive (ADR-0013 Phase 5) ------------------------------
+
+  /// Drain a [DecryptStreamHandle] into a single byte buffer + return
+  /// the summary. Test helper only — real callers (`TransferService`)
+  /// pipe chunks into a [PlaintextDestination] as they arrive.
+  Future<(Uint8List, DecryptSummary)> drainDecrypt(
+    DecryptStreamHandle h,
+  ) async {
+    final all = <int>[];
+    await for (final chunk in h.stream) {
+      all.addAll(chunk);
+    }
+    final summary = await h.done;
+    return (Uint8List.fromList(all), summary);
+  }
 
   test(
-    'decryptFileToTempFile: multi-chunk file roundtrips via in-memory encrypt',
+    'decryptToStream: multi-chunk ciphertext roundtrips via in-memory encrypt',
     () async {
       if (skipReason != null) return;
-      final tempDir = await Directory.systemTemp.createTemp('opq-test-');
-      try {
-        final key = fc!.generateFileKey();
-        // ~3 chunks + tail so we exercise the multi-chunk path.
-        final plain = Uint8List.fromList(
-          List<int>.generate(
-            FileCrypto.plaintextChunkBytes * 3 + 12345,
-            (i) => (i * 91 + 7) & 0xff,
-          ),
-        );
-        final ct = await fc!.encryptFile(plaintext: plain, key: key);
-        final ctFile = File('${tempDir.path}/ct.bin');
-        await ctFile.writeAsBytes(ct);
+      final key = fc!.generateFileKey();
+      // ~3 chunks + tail so we exercise the multi-chunk path.
+      final plain = Uint8List.fromList(
+        List<int>.generate(
+          FileCrypto.plaintextChunkBytes * 3 + 12345,
+          (i) => (i * 91 + 7) & 0xff,
+        ),
+      );
+      final ct = await fc!.encryptFile(plaintext: plain, key: key);
 
-        int lastDone = -1;
-        int lastTotal = -1;
-        final dec = await fc!.decryptFileToTempFile(
-          ciphertextPath: ctFile.path,
-          key: key,
-          tempDir: tempDir,
-          onProgress: (done, total) {
-            lastDone = done;
-            lastTotal = total;
-          },
-        );
-
-        expect(dec.plaintextLength, plain.length);
-        expect(lastTotal, ct.length);
-        expect(lastDone, ct.length);
-
-        final gotBytes = await File(dec.plaintextPath).readAsBytes();
-        expect(gotBytes, plain);
-      } finally {
-        if (await tempDir.exists()) {
-          await tempDir.delete(recursive: true);
-        }
-      }
+      int lastDone = -1;
+      int lastTotal = -1;
+      final handle = fc!.decryptToStream(
+        ciphertextStream: Stream<List<int>>.value(ct),
+        key: key,
+        ciphertextTotalBytes: ct.length,
+        onProgress: (done, total) {
+          lastDone = done;
+          lastTotal = total;
+        },
+      );
+      final (gotBytes, summary) = await drainDecrypt(handle);
+      expect(gotBytes, plain);
+      expect(summary.plaintextLength, plain.length);
+      expect(lastTotal, ct.length);
+      expect(lastDone, ct.length);
     },
   );
 
   test(
-    'decryptFileToTempFile: interop with in-memory encryptFile (both formats compatible)',
+    'decryptToStream: interop with in-memory encryptFile (same OS4S container)',
     () async {
       if (skipReason != null) return;
-      final tempDir = await Directory.systemTemp.createTemp('opq-test-');
-      try {
-        final key = fc!.generateFileKey();
-        final plain = Uint8List.fromList(
-          List<int>.generate(2000, (i) => i & 0xff),
-        );
-        // Encrypt in memory (the older path), write ciphertext to
-        // disk, then stream-decrypt. The streaming decrypt must
-        // accept the same OS4S container the in-memory encrypt
-        // produces.
-        final ct = await fc!.encryptFile(plaintext: plain, key: key);
-        final ctFile = File('${tempDir.path}/ct.bin');
-        await ctFile.writeAsBytes(ct);
-
-        final dec = await fc!.decryptFileToTempFile(
-          ciphertextPath: ctFile.path,
-          key: key,
-          tempDir: tempDir,
-        );
-
-        final gotBytes = await File(dec.plaintextPath).readAsBytes();
-        expect(gotBytes, plain);
-      } finally {
-        if (await tempDir.exists()) {
-          await tempDir.delete(recursive: true);
-        }
-      }
+      final key = fc!.generateFileKey();
+      final plain = Uint8List.fromList(
+        List<int>.generate(2000, (i) => i & 0xff),
+      );
+      final ct = await fc!.encryptFile(plaintext: plain, key: key);
+      final handle = fc!.decryptToStream(
+        ciphertextStream: Stream<List<int>>.value(ct),
+        key: key,
+      );
+      final (gotBytes, _) = await drainDecrypt(handle);
+      expect(gotBytes, plain);
     },
   );
 
   test(
-    'decryptFileToTempFile: missing OS4S magic surfaces FormatException + cleans temp',
+    'decryptToStream: missing OS4S magic surfaces FormatException on drain',
     () async {
       if (skipReason != null) return;
-      final tempDir = await Directory.systemTemp.createTemp('opq-test-');
-      try {
-        final key = fc!.generateFileKey();
-        // Non-OS4S bytes.
-        final bogus = File('${tempDir.path}/bogus.bin');
-        await bogus.writeAsBytes(
-          Uint8List.fromList(List<int>.filled(200, 0x42)),
-        );
-
-        await expectLater(
-          fc!.decryptFileToTempFile(
-            ciphertextPath: bogus.path,
-            key: key,
-            tempDir: tempDir,
-          ),
-          throwsA(isA<FormatException>()),
-        );
-
-        final leftovers = tempDir
-            .listSync()
-            .where((e) => e.path.endsWith('.dec.tmp'))
-            .toList();
-        expect(leftovers, isEmpty);
-      } finally {
-        if (await tempDir.exists()) {
-          await tempDir.delete(recursive: true);
-        }
-      }
+      final key = fc!.generateFileKey();
+      final bogus = Uint8List.fromList(List<int>.filled(200, 0x42));
+      final handle = fc!.decryptToStream(
+        ciphertextStream: Stream<List<int>>.value(bogus),
+        key: key,
+      );
+      await expectLater(
+        () async {
+          await for (final _ in handle.stream) {}
+        }(),
+        throwsA(isA<FormatException>()),
+      );
+      // `done` mirrors the stream error.
+      await expectLater(handle.done, throwsA(isA<FormatException>()));
     },
   );
 
   test(
-    'decryptFileToTempFile: cancel mid-decrypt deletes the partial temp file',
+    'decryptToStream: throwIfCancelled surfaces the cancel error on the stream',
     () async {
       if (skipReason != null) return;
-      final tempDir = await Directory.systemTemp.createTemp('opq-test-');
-      try {
-        final key = fc!.generateFileKey();
-        final plain = Uint8List.fromList(
-          List<int>.generate(
-            FileCrypto.plaintextChunkBytes * 5,
-            (i) => i & 0xff,
-          ),
-        );
-        final ct = await fc!.encryptFile(plaintext: plain, key: key);
-        final ctFile = File('${tempDir.path}/ct.bin');
-        await ctFile.writeAsBytes(ct);
-
-        var callCount = 0;
-        void throwOnThirdCall() {
-          callCount++;
-          if (callCount >= 3) {
-            throw const _TestCancelled();
-          }
-        }
-
-        await expectLater(
-          fc!.decryptFileToTempFile(
-            ciphertextPath: ctFile.path,
-            key: key,
-            tempDir: tempDir,
-            throwIfCancelled: throwOnThirdCall,
-          ),
-          throwsA(isA<_TestCancelled>()),
-        );
-
-        final leftovers = tempDir
-            .listSync()
-            .where((e) => e.path.endsWith('.dec.tmp'))
-            .toList();
-        expect(leftovers, isEmpty);
-      } finally {
-        if (await tempDir.exists()) {
-          await tempDir.delete(recursive: true);
+      final key = fc!.generateFileKey();
+      final plain = Uint8List.fromList(
+        List<int>.generate(
+          FileCrypto.plaintextChunkBytes * 5,
+          (i) => i & 0xff,
+        ),
+      );
+      final ct = await fc!.encryptFile(plaintext: plain, key: key);
+      // Feed the ciphertext in many small chunks so the cancel check
+      // fires several times before the stream would otherwise drain.
+      Stream<List<int>> feed() async* {
+        var offset = 0;
+        while (offset < ct.length) {
+          final end = (offset + 1024).clamp(0, ct.length);
+          yield Uint8List.sublistView(ct, offset, end);
+          offset = end;
         }
       }
+      var callCount = 0;
+      void throwOnThirdCall() {
+        callCount++;
+        if (callCount >= 3) {
+          throw const _TestCancelled();
+        }
+      }
+      final handle = fc!.decryptToStream(
+        ciphertextStream: feed(),
+        key: key,
+        throwIfCancelled: throwOnThirdCall,
+      );
+      await expectLater(
+        () async {
+          await for (final _ in handle.stream) {}
+        }(),
+        throwsA(isA<_TestCancelled>()),
+      );
+      await expectLater(handle.done, throwsA(isA<_TestCancelled>()));
     },
   );
 
