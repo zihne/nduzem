@@ -13,6 +13,7 @@ import '../../api/transfers_api.dart';
 import '../../api/users_api.dart';
 import '../../crypto/envelope.dart';
 import '../../crypto/file_crypto.dart';
+import '../../crypto/plaintext_destination.dart';
 import '../../crypto/plaintext_source.dart';
 import '../../crypto/sealed_box.dart';
 import '../../storage/secure_storage.dart';
@@ -520,32 +521,43 @@ class TransferService {
       );
 
       // 6. Stream-decrypt the ciphertext temp file into a plaintext
-      // temp file. Throws FormatException on missing OS4S magic and
-      // SodiumException on any AEAD failure.
+      // destination (ADR-0013 Phase 5). Mobile writes chunks to a
+      // fresh plaintext temp file; web (Phase 6) will land the
+      // chunks in a Blob / File-System-Access writer. Throws
+      // FormatException on missing OS4S magic and SodiumException
+      // on any AEAD failure.
       cancel?.throwIfCancelled();
       onProgress?.call(ReceivePhase.decrypting, 0, downloadedLength);
-      final dec = await _fileCrypto.decryptFileToTempFile(
-        ciphertextPath: ciphertextFile.path,
-        key: fileKey,
-        tempDir: tempDir,
-        throwIfCancelled: cancel?.throwIfCancelled,
-        onProgress: (done, total) =>
-            onProgress?.call(ReceivePhase.decrypting, done, total),
-      );
+      final dest = await FilePlaintextDestination.newTempFile(tempDir);
+      final DecryptSummary summary;
+      try {
+        final handle = _fileCrypto.decryptToStream(
+          ciphertextStream: ciphertextFile.openRead(),
+          key: fileKey,
+          ciphertextTotalBytes: downloadedLength,
+          onProgress: (done, total) =>
+              onProgress?.call(ReceivePhase.decrypting, done, total),
+          throwIfCancelled: cancel?.throwIfCancelled,
+        );
+        await for (final chunk in handle.stream) {
+          await dest.add(chunk);
+        }
+        await dest.close();
+        summary = await handle.done;
+      } on Object {
+        await dest.discard();
+        rethrow;
+      }
 
       // Guardrail: what the header claimed the length would be MUST
       // match what we actually decrypted. Any mismatch is a
       // tampering signal.
-      if (dec.plaintextLength != header.plaintextLength) {
+      if (summary.plaintextLength != header.plaintextLength) {
         // Clean the plaintext temp we just wrote before we throw.
-        try {
-          await File(dec.plaintextPath).delete();
-        } on Object {
-          // ignore
-        }
+        await dest.discard();
         throw StateError(
-          'Decrypted plaintext length (${dec.plaintextLength}) does '
-          'not match the header claim (${header.plaintextLength}).',
+          'Decrypted plaintext length (${summary.plaintextLength}) '
+          'does not match the header claim (${header.plaintextLength}).',
         );
       }
 
@@ -556,8 +568,8 @@ class TransferService {
         // dialog.
         filename: _sanitiseFilename(header.filename, transferId),
         mime: header.mime,
-        plaintextPath: dec.plaintextPath,
-        plaintextLength: dec.plaintextLength,
+        plaintextPath: dest.path,
+        plaintextLength: summary.plaintextLength,
         senderSignatureVerified: senderSignatureVerified,
         senderIdentityPubB64: dl.senderIdentityPubB64,
         senderId: dl.senderId,
@@ -746,27 +758,36 @@ class TransferService {
           fileKey: fileKey,
         );
 
-        // 5. Stream-decrypt ciphertext → plaintext.
+        // 5. Stream-decrypt ciphertext → plaintext destination
+        // (ADR-0013 Phase 5).
         cancel?.throwIfCancelled();
         onProgress?.call(ReceivePhase.decrypting, 0, downloadedLength);
-        final dec = await _fileCrypto.decryptFileToTempFile(
-          ciphertextPath: ciphertextFile.path,
-          key: fileKey,
-          tempDir: tempDir,
-          throwIfCancelled: cancel?.throwIfCancelled,
-          onProgress: (done, total) =>
-              onProgress?.call(ReceivePhase.decrypting, done, total),
-        );
-
-        if (dec.plaintextLength != header.plaintextLength) {
-          try {
-            await File(dec.plaintextPath).delete();
-          } on Object {
-            // ignore
+        final dest = await FilePlaintextDestination.newTempFile(tempDir);
+        final DecryptSummary summary;
+        try {
+          final handle = _fileCrypto.decryptToStream(
+            ciphertextStream: ciphertextFile.openRead(),
+            key: fileKey,
+            ciphertextTotalBytes: downloadedLength,
+            onProgress: (done, total) =>
+                onProgress?.call(ReceivePhase.decrypting, done, total),
+            throwIfCancelled: cancel?.throwIfCancelled,
+          );
+          await for (final chunk in handle.stream) {
+            await dest.add(chunk);
           }
+          await dest.close();
+          summary = await handle.done;
+        } on Object {
+          await dest.discard();
+          rethrow;
+        }
+
+        if (summary.plaintextLength != header.plaintextLength) {
+          await dest.discard();
           throw StateError(
-            'Decrypted plaintext length (${dec.plaintextLength}) does '
-            'not match the header claim (${header.plaintextLength}).',
+            'Decrypted plaintext length (${summary.plaintextLength}) '
+            'does not match the header claim (${header.plaintextLength}).',
           );
         }
 
@@ -774,8 +795,8 @@ class TransferService {
           transferId: transferId,
           filename: _sanitiseFilename(header.filename, transferId),
           mime: header.mime,
-          plaintextPath: dec.plaintextPath,
-          plaintextLength: dec.plaintextLength,
+          plaintextPath: dest.path,
+          plaintextLength: summary.plaintextLength,
           // Link mode has no signature to verify against — the
           // JS decrypt page skips this same step (ADR-0010).
           senderSignatureVerified: false,

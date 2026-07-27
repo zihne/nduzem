@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -343,82 +342,81 @@ class FileCrypto {
     }
   }
 
-  /// Stream-decrypt `ciphertextPath` into a fresh plaintext temp file
-  /// (ADR-0006). Peak memory: ~one 64 KiB secretstream chunk + stream
-  /// I/O overhead — no copies of the plaintext or ciphertext held whole.
+  /// Stream-decrypt a ciphertext byte stream, returning plaintext AS
+  /// A STREAM of `Uint8List` chunks — no temp files (ADR-0013 Phase 5).
   ///
-  /// The caller is responsible for deleting the returned plaintext
-  /// temp file after the recipient has saved or acked the transfer.
+  /// Mirror of [encryptToStream] on the receive side. The input is
+  /// any `Stream<List<int>>` — mobile passes `File.openRead()`; a
+  /// future refactor can pipe the HTTP response body directly. Chunks
+  /// emerge on the returned [DecryptStreamHandle.stream]; the
+  /// `plaintextLength` summary lands on `handle.done` once the last
+  /// chunk emits.
+  ///
+  /// **Caller contract**: fully drain the stream. Cancelling mid-way
+  /// leaves `done` pending indefinitely. To cancel from the outside,
+  /// throw from `throwIfCancelled` — that surfaces as a stream error
+  /// AND completes `done` with the same error.
+  ///
+  /// Peak memory: ~one 64 KiB secretstream chunk + a small
+  /// buffer used to align inbound chunks to the sodium framing.
   ///
   /// Throws [FormatException] when the OS4S magic prefix is missing
-  /// (older-format ciphertext) and `SodiumException` on any AEAD
-  /// failure (byte corruption, truncation, wrong key). Reports
-  /// progress per-chunk via `onProgress(plaintextBytesWritten,
-  /// ciphertextBytesTotal)`. Cancellation via `throwIfCancelled` fires
-  /// per read chunk; on trip the partial plaintext file is deleted.
-  Future<DecryptedFileResult> decryptFileToTempFile({
-    required String ciphertextPath,
+  /// or wrong (older-format ciphertext); throws `SodiumException` on
+  /// any AEAD failure (byte corruption, truncation, wrong key).
+  DecryptStreamHandle decryptToStream({
+    required Stream<List<int>> ciphertextStream,
     required Uint8List key,
-    Directory? tempDir,
+    int? ciphertextTotalBytes,
     void Function(int done, int total)? onProgress,
     void Function()? throwIfCancelled,
-  }) async {
-    final tmpDir = tempDir ?? Directory.systemTemp;
-    if (!await tmpDir.exists()) {
-      await tmpDir.create(recursive: true);
-    }
-    final source = File(ciphertextPath);
-    final ctTotalBytes = await source.length();
-    final tempFile = File(
-      '${tmpDir.path}/opaqueshare-${_randomId()}.dec.tmp',
+  }) {
+    final doneCompleter = Completer<DecryptSummary>();
+    final stream = _decryptChunks(
+      ciphertextStream: ciphertextStream,
+      key: key,
+      ciphertextTotalBytes: ciphertextTotalBytes,
+      onProgress: onProgress,
+      throwIfCancelled: throwIfCancelled,
+      doneCompleter: doneCompleter,
     );
+    return DecryptStreamHandle._(stream: stream, done: doneCompleter.future);
+  }
 
+  Stream<Uint8List> _decryptChunks({
+    required Stream<List<int>> ciphertextStream,
+    required Uint8List key,
+    required Completer<DecryptSummary> doneCompleter,
+    int? ciphertextTotalBytes,
+    void Function(int done, int total)? onProgress,
+    void Function()? throwIfCancelled,
+  }) async* {
     final secret = SecureKey.fromList(_sodium, key);
-    final sink = tempFile.openWrite();
     var plaintextLength = 0;
-
     try {
-      // Emit the ciphertext body (skipping the magic prefix) as a
-      // stream: header first (24 bytes), then successive ciphertext
-      // chunks of up to `aBytes + plaintextChunkBytes` each. Chunks
-      // may straddle read-from-disk boundaries — we re-frame here.
-      final ciphertextStream = _rechunkForPull(
-        source,
+      final rechunked = _rechunkStream(
+        ciphertextStream,
+        totalBytes: ciphertextTotalBytes ?? 0,
         onProgress: onProgress,
-        totalBytes: ctTotalBytes,
         throwIfCancelled: throwIfCancelled,
       );
-
       final plaintextStream = _sodium.crypto.secretStream.pullChunked(
-        cipherStream: ciphertextStream,
+        cipherStream: rechunked,
         key: secret,
         chunkSize: plaintextChunkBytes,
       );
-
       await for (final chunk in plaintextStream) {
-        sink.add(chunk);
-        plaintextLength += chunk.length;
+        final asBytes = chunk is Uint8List ? chunk : Uint8List.fromList(chunk);
+        yield asBytes;
+        plaintextLength += asBytes.length;
       }
-
-      await sink.flush();
-      await sink.close();
-
-      return DecryptedFileResult(
-        plaintextPath: tempFile.path,
-        plaintextLength: plaintextLength,
-      );
-    } on Object {
-      try {
-        await sink.close();
-      } on Object {
-        // ignore
+      if (!doneCompleter.isCompleted) {
+        doneCompleter.complete(
+          DecryptSummary(plaintextLength: plaintextLength),
+        );
       }
-      try {
-        if (await tempFile.exists()) {
-          await tempFile.delete();
-        }
-      } on Object {
-        // ignore
+    } on Object catch (exc, st) {
+      if (!doneCompleter.isCompleted) {
+        doneCompleter.completeError(exc, st);
       }
       rethrow;
     } finally {
@@ -426,14 +424,18 @@ class FileCrypto {
     }
   }
 
-  /// Read the ciphertext file and yield: (1) the OS4S magic prefix is
-  /// consumed and validated (not yielded — sodium doesn't want it);
-  /// (2) the secretstream header as the first stream event; (3)
-  /// successive ciphertext chunks of `ciphertextChunkBytes` bytes,
-  /// with the last chunk possibly smaller. Progress + cancel fire per
-  /// read chunk.
-  Stream<List<int>> _rechunkForPull(
-    File source, {
+  /// Consume the ciphertext byte stream and yield: (1) the OS4S
+  /// magic prefix is consumed and validated (not yielded — sodium
+  /// doesn't want it); (2) the secretstream header as the first
+  /// stream event; (3) successive ciphertext chunks of
+  /// `ciphertextChunkBytes` bytes, with the last chunk possibly
+  /// smaller. Progress + cancel fire per read chunk.
+  ///
+  /// Source-agnostic — the input is any `Stream<List<int>>` so both
+  /// `File.openRead()` (mobile) and a future HTTP-response-body path
+  /// plug in the same way.
+  Stream<List<int>> _rechunkStream(
+    Stream<List<int>> source, {
     void Function(int done, int total)? onProgress,
     required int totalBytes,
     void Function()? throwIfCancelled,
@@ -489,7 +491,7 @@ class FileCrypto {
       }
     }
 
-    await for (final chunk in source.openRead()) {
+    await for (final chunk in source) {
       throwIfCancelled?.call();
       buffer.add(chunk);
       consumed += chunk.length;
@@ -502,8 +504,6 @@ class FileCrypto {
     // The stream close below signals end-of-stream to pullChunked.
     yield* flush(true);
   }
-
-  static String _randomId() => randomTempSlug();
 
   /// Short, collision-resistant slug for temp-file names. Reused by
   /// callers that build their own temp paths (e.g.
@@ -550,14 +550,26 @@ class EncryptSummary {
   final int ciphertextLength;
 }
 
-/// Result of [FileCrypto.decryptFileToTempFile] (ADR-0006). The caller
-/// owns `plaintextPath` and MUST delete the file after the user has
-/// saved / opened / acked it — success, cancel, or error.
-class DecryptedFileResult {
-  const DecryptedFileResult({
-    required this.plaintextPath,
-    required this.plaintextLength,
-  });
-  final String plaintextPath;
+/// Handle returned by [FileCrypto.decryptToStream] (ADR-0013 Phase 5).
+/// Symmetric with [EncryptStreamHandle] on the send side.
+///
+///   - [stream] emits plaintext chunk-by-chunk. Caller MUST fully
+///     consume it (drain the subscription); dropping it mid-way
+///     leaves [done] pending forever.
+///   - [done] resolves with the plaintext length once the stream
+///     drains normally, or with the same error the stream errored
+///     with (missing OS4S magic, AEAD failure, cancel).
+class DecryptStreamHandle {
+  const DecryptStreamHandle._({required this.stream, required this.done});
+  final Stream<Uint8List> stream;
+  final Future<DecryptSummary> done;
+}
+
+/// Plaintext length delivered by [DecryptStreamHandle.done]. Enough
+/// for the caller to cross-check against `enc_header.plaintextLength`
+/// (M2 truncation guard). Only valid AFTER the stream drains — the
+/// length is accumulated per emitted chunk.
+class DecryptSummary {
+  const DecryptSummary({required this.plaintextLength});
   final int plaintextLength;
 }
