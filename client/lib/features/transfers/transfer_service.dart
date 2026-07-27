@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as dart_crypto;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -444,24 +445,44 @@ class TransferService {
         );
       }
 
-      final tempDir = await getTemporaryDirectory();
-      final ciphertextFile = File(
-        '${tempDir.path}/opaqueshare-${FileCrypto.randomTempSlug()}.ct.tmp',
-      );
+      // Web has no filesystem — the ciphertext lands in a Uint8List
+      // and the plaintext lands in a BlobPlaintextDestination.
+      // Mobile keeps the temp-file staging for the ciphertext and the
+      // FilePlaintextDestination for the plaintext.
+      final Directory? tempDir = kIsWeb ? null : await getTemporaryDirectory();
+      final File? ciphertextFile = tempDir == null
+          ? null
+          : File(
+              '${tempDir.path}/opaqueshare-${FileCrypto.randomTempSlug()}.ct.tmp',
+            );
 
       try {
-      // 2. Stream the ciphertext into a temp file, hashing as we go.
-      // Rolling SHA-256 lets us verify integrity without a second
-      // pass over the file. `Content-Length` from the storage layer
-      // is the progress total; falls back to the envelope's declared
-      // byte_count if the header is missing.
-      final downloadedLength = await _streamDownloadWithHash(
-        url: dl.downloadUrl,
-        destination: ciphertextFile,
-        expectedSha256Hex: dl.blobSha256Hex,
-        onProgress: onProgress,
-        cancel: cancel,
-      );
+      // 2. Download the ciphertext, hashing as we go. Rolling
+      // SHA-256 verifies integrity without a second pass.
+      // `Content-Length` from the storage layer is the progress total;
+      // falls back to the envelope's declared byte_count if the
+      // header is missing.
+      final int downloadedLength;
+      final Uint8List? ciphertextBytes;
+      if (ciphertextFile != null) {
+        downloadedLength = await _streamDownloadWithHashToFile(
+          url: dl.downloadUrl,
+          destination: ciphertextFile,
+          expectedSha256Hex: dl.blobSha256Hex,
+          onProgress: onProgress,
+          cancel: cancel,
+        );
+        ciphertextBytes = null;
+      } else {
+        final result = await _streamDownloadWithHashToBytes(
+          url: dl.downloadUrl,
+          expectedSha256Hex: dl.blobSha256Hex,
+          onProgress: onProgress,
+          cancel: cancel,
+        );
+        downloadedLength = result.length;
+        ciphertextBytes = result;
+      }
 
       // 3. Verify the sender signature — same wire contract as the
       // in-memory path (ADR-0031). Skipped when the sender has erased
@@ -528,11 +549,15 @@ class TransferService {
       // on any AEAD failure.
       cancel?.throwIfCancelled();
       onProgress?.call(ReceivePhase.decrypting, 0, downloadedLength);
-      final dest = await FilePlaintextDestination.newTempFile(tempDir);
+      final PlaintextDestination dest = tempDir == null
+          ? BlobPlaintextDestination()
+          : await FilePlaintextDestination.newTempFile(tempDir);
       final DecryptSummary summary;
       try {
         final handle = _fileCrypto.decryptToStream(
-          ciphertextStream: ciphertextFile.openRead(),
+          ciphertextStream: ciphertextFile == null
+              ? Stream<List<int>>.value(ciphertextBytes!)
+              : ciphertextFile.openRead(),
           key: fileKey,
           ciphertextTotalBytes: downloadedLength,
           onProgress: (done, total) =>
@@ -568,7 +593,10 @@ class TransferService {
         // dialog.
         filename: _sanitiseFilename(header.filename, transferId),
         mime: header.mime,
-        plaintextPath: dest.path,
+        plaintextPath:
+            dest is FilePlaintextDestination ? dest.path : null,
+        plaintextBytes:
+            dest is BlobPlaintextDestination ? dest.bytes : null,
         plaintextLength: summary.plaintextLength,
         senderSignatureVerified: senderSignatureVerified,
         senderIdentityPubB64: dl.senderIdentityPubB64,
@@ -576,14 +604,17 @@ class TransferService {
         senderHandle: dl.senderHandle,
       );
       } finally {
-        // Always drop the ciphertext temp file. Success, cancel, or
-        // failure — the ciphertext is consumed by the decrypt step.
-        try {
-          if (await ciphertextFile.exists()) {
-            await ciphertextFile.delete();
+        // Always drop the ciphertext temp file (mobile only — web
+        // ciphertext lived in memory and drops when the buffer is
+        // GC'd). Success, cancel, or failure.
+        if (ciphertextFile != null) {
+          try {
+            if (await ciphertextFile.exists()) {
+              await ciphertextFile.delete();
+            }
+          } on Object {
+            // ignore
           }
-        } on Object {
-          // ignore
         }
       }
     } finally {
@@ -599,16 +630,69 @@ class TransferService {
   }
 
   /// Stream the presigned-URL response body into [destination] while
-  /// feeding each read chunk into a chunked SHA-256 hasher. Returns
-  /// the total bytes written and throws on a hash mismatch (before
-  /// any further work is spent). Progress fires on
-  /// `ReceivePhase.downloading` throttled to ~250 ms.
-  Future<int> _streamDownloadWithHash({
+  /// feeding each read chunk into a chunked SHA-256 hasher (mobile —
+  /// there's a filesystem). Returns the total bytes written; throws
+  /// on a hash mismatch. Progress fires on `ReceivePhase.downloading`
+  /// throttled to ~250 ms.
+  Future<int> _streamDownloadWithHashToFile({
     required String url,
     required File destination,
     required String expectedSha256Hex,
     required void Function(ReceivePhase, int, int)? onProgress,
     required CancelToken? cancel,
+  }) async {
+    final sink = destination.openWrite();
+    try {
+      final result = await _drainDownloadStream(
+        url: url,
+        expectedSha256Hex: expectedSha256Hex,
+        onProgress: onProgress,
+        cancel: cancel,
+        onChunk: (chunk) => sink.add(chunk),
+      );
+      await sink.flush();
+      await sink.close();
+      return result;
+    } on Object {
+      try {
+        await sink.close();
+      } on Object {
+        // ignore
+      }
+      rethrow;
+    }
+  }
+
+  /// Same shape as [_streamDownloadWithHashToFile] but writes the
+  /// ciphertext into an in-memory buffer instead of a file (web —
+  /// there's no filesystem). Peak memory ≈ full ciphertext size; the
+  /// streaming FSA save path in a future polish will reduce this.
+  Future<Uint8List> _streamDownloadWithHashToBytes({
+    required String url,
+    required String expectedSha256Hex,
+    required void Function(ReceivePhase, int, int)? onProgress,
+    required CancelToken? cancel,
+  }) async {
+    final buffer = BytesBuilder(copy: false);
+    await _drainDownloadStream(
+      url: url,
+      expectedSha256Hex: expectedSha256Hex,
+      onProgress: onProgress,
+      cancel: cancel,
+      onChunk: buffer.add,
+    );
+    return buffer.takeBytes();
+  }
+
+  /// Shared body for the two download helpers above. Drains the
+  /// presigned-URL response, forwards each chunk to [onChunk], updates
+  /// the rolling SHA-256, and enforces the hash check before returning.
+  Future<int> _drainDownloadStream({
+    required String url,
+    required String expectedSha256Hex,
+    required void Function(ReceivePhase, int, int)? onProgress,
+    required CancelToken? cancel,
+    required void Function(List<int> chunk) onChunk,
   }) async {
     final request = http.Request('GET', Uri.parse(url));
     final resp = await runWithNetworkErrorTranslation(
@@ -629,46 +713,29 @@ class TransferService {
       (digests) => capturedDigest = digests.single,
     );
     final hasher = dart_crypto.sha256.startChunkedConversion(digestSink);
-    final sink = destination.openWrite();
     var received = 0;
     var lastEmitAt = DateTime.now();
     const emitEvery = Duration(milliseconds: 250);
-    try {
-      onProgress?.call(ReceivePhase.downloading, 0, totalBytes);
-      // Wrap the stream iteration in the same translator — the socket
-      // can drop mid-download and surface as ClientException or
-      // SocketException from inside the async iterator.
-      await runWithNetworkErrorTranslation(() async {
-        await for (final chunk in resp.stream) {
-          cancel?.throwIfCancelled();
-          sink.add(chunk);
-          hasher.add(chunk);
-          received += chunk.length;
-          final now = DateTime.now();
-          if (now.difference(lastEmitAt) >= emitEvery) {
-            lastEmitAt = now;
-            onProgress?.call(
-              ReceivePhase.downloading,
-              received,
-              totalBytes,
-            );
-          }
+    onProgress?.call(ReceivePhase.downloading, 0, totalBytes);
+    await runWithNetworkErrorTranslation(() async {
+      await for (final chunk in resp.stream) {
+        cancel?.throwIfCancelled();
+        onChunk(chunk);
+        hasher.add(chunk);
+        received += chunk.length;
+        final now = DateTime.now();
+        if (now.difference(lastEmitAt) >= emitEvery) {
+          lastEmitAt = now;
+          onProgress?.call(
+            ReceivePhase.downloading,
+            received,
+            totalBytes,
+          );
         }
-      });
-      // Final tick.
-      onProgress?.call(ReceivePhase.downloading, received, totalBytes);
-      await sink.flush();
-      await sink.close();
-      hasher.close();
-    } on Object {
-      try {
-        await sink.close();
-      } on Object {
-        // ignore
       }
-      rethrow;
-    }
-
+    });
+    onProgress?.call(ReceivePhase.downloading, received, totalBytes);
+    hasher.close();
     final digest = capturedDigest;
     if (digest == null) {
       throw StateError('sha256 sink closed without emitting a digest');
@@ -731,20 +798,38 @@ class TransferService {
       // the password gets checked and download_count increments.
       final dl = await _links.download(transferId, password: password);
 
-      final tempDir = await getTemporaryDirectory();
-      final ciphertextFile = File(
-        '${tempDir.path}/opaqueshare-${FileCrypto.randomTempSlug()}.ct.tmp',
-      );
+      // Same platform split as [receive]: mobile stages ciphertext on
+      // disk, web keeps it in memory.
+      final Directory? tempDir = kIsWeb ? null : await getTemporaryDirectory();
+      final File? ciphertextFile = tempDir == null
+          ? null
+          : File(
+              '${tempDir.path}/opaqueshare-${FileCrypto.randomTempSlug()}.ct.tmp',
+            );
 
       try {
-        // 2. Stream ciphertext to temp file + rolling SHA-256.
-        final downloadedLength = await _streamDownloadWithHash(
-          url: dl.downloadUrl,
-          destination: ciphertextFile,
-          expectedSha256Hex: dl.blobSha256Hex,
-          onProgress: onProgress,
-          cancel: cancel,
-        );
+        // 2. Download ciphertext + rolling SHA-256.
+        final int downloadedLength;
+        final Uint8List? ciphertextBytes;
+        if (ciphertextFile != null) {
+          downloadedLength = await _streamDownloadWithHashToFile(
+            url: dl.downloadUrl,
+            destination: ciphertextFile,
+            expectedSha256Hex: dl.blobSha256Hex,
+            onProgress: onProgress,
+            cancel: cancel,
+          );
+          ciphertextBytes = null;
+        } else {
+          final result = await _streamDownloadWithHashToBytes(
+            url: dl.downloadUrl,
+            expectedSha256Hex: dl.blobSha256Hex,
+            onProgress: onProgress,
+            cancel: cancel,
+          );
+          downloadedLength = result.length;
+          ciphertextBytes = result;
+        }
 
         // 3. Sender-signature verification is intentionally skipped:
         //    link mode has no on-platform sender identity, and the
@@ -759,14 +844,18 @@ class TransferService {
         );
 
         // 5. Stream-decrypt ciphertext → plaintext destination
-        // (ADR-0013 Phase 5).
+        // (ADR-0013 Phase 5 + Phase 6).
         cancel?.throwIfCancelled();
         onProgress?.call(ReceivePhase.decrypting, 0, downloadedLength);
-        final dest = await FilePlaintextDestination.newTempFile(tempDir);
+        final PlaintextDestination dest = tempDir == null
+            ? BlobPlaintextDestination()
+            : await FilePlaintextDestination.newTempFile(tempDir);
         final DecryptSummary summary;
         try {
           final handle = _fileCrypto.decryptToStream(
-            ciphertextStream: ciphertextFile.openRead(),
+            ciphertextStream: ciphertextFile == null
+                ? Stream<List<int>>.value(ciphertextBytes!)
+                : ciphertextFile.openRead(),
             key: fileKey,
             ciphertextTotalBytes: downloadedLength,
             onProgress: (done, total) =>
@@ -795,7 +884,10 @@ class TransferService {
           transferId: transferId,
           filename: _sanitiseFilename(header.filename, transferId),
           mime: header.mime,
-          plaintextPath: dest.path,
+          plaintextPath:
+              dest is FilePlaintextDestination ? dest.path : null,
+          plaintextBytes:
+              dest is BlobPlaintextDestination ? dest.bytes : null,
           plaintextLength: summary.plaintextLength,
           // Link mode has no signature to verify against — the
           // JS decrypt page skips this same step (ADR-0010).
@@ -805,12 +897,14 @@ class TransferService {
           senderHandle: null,
         );
       } finally {
-        try {
-          if (await ciphertextFile.exists()) {
-            await ciphertextFile.delete();
+        if (ciphertextFile != null) {
+          try {
+            if (await ciphertextFile.exists()) {
+              await ciphertextFile.delete();
+            }
+          } on Object {
+            // ignore
           }
-        } on Object {
-          // ignore
         }
       }
     } finally {
@@ -944,31 +1038,45 @@ class SendResult {
   final Uint8List? linkFileKey;
 }
 
-/// Result of a successful streaming download + decrypt (ADR-0006).
-/// The plaintext lives at `plaintextPath` as a temp file — the caller
-/// owns its lifetime: reads it into memory at save-time for
-/// `file_picker.saveFile`, then deletes it after ack (or cancel).
+/// Result of a successful streaming download + decrypt (ADR-0006 +
+/// ADR-0013 Phase 6). Exactly one of [plaintextPath] and
+/// [plaintextBytes] is non-null:
+///
+///   - **Mobile** — [plaintextPath] holds the temp-file path; save-time
+///     reads it into memory (small file) or streams it via SAF
+///     (large file); the receive screen deletes it after ack / cancel.
+///   - **Web** — [plaintextBytes] holds the assembled plaintext bytes;
+///     save-time hands them to the File System Access API writer or
+///     an `<a download>` blob URL (browser handles the download).
 class DecryptedTransfer {
   const DecryptedTransfer({
     required this.transferId,
     required this.filename,
     required this.mime,
-    required this.plaintextPath,
     required this.plaintextLength,
     required this.senderSignatureVerified,
     required this.senderIdentityPubB64,
     required this.senderId,
     required this.senderHandle,
-  });
+    this.plaintextPath,
+    this.plaintextBytes,
+  }) : assert(
+          (plaintextPath == null) != (plaintextBytes == null),
+          'DecryptedTransfer: exactly one of plaintextPath/plaintextBytes '
+          'must be set',
+        );
   final String transferId;
   final String filename;
   final String? mime;
 
-  /// Filesystem path of the decrypted plaintext, held as a temp file
-  /// under the OS temp dir. The receive screen reads bytes from here
-  /// only at save-time (peak memory = plaintext size, once), then
-  /// deletes on ack.
-  final String plaintextPath;
+  /// Filesystem path of the decrypted plaintext temp file. `null` on
+  /// web where no filesystem exists — read [plaintextBytes] instead.
+  /// On mobile the receive screen deletes this file on ack / cancel.
+  final String? plaintextPath;
+
+  /// Assembled plaintext bytes. `null` on mobile. Only populated on
+  /// web where the browser Save step needs the bytes in memory.
+  final Uint8List? plaintextBytes;
   final int plaintextLength;
 
   /// True when the recipient verified the sender's Ed25519 detached

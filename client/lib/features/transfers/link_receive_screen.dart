@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -16,6 +17,7 @@ import '../auth/auth_providers.dart';
 import '../history/transfer_history_entry.dart';
 import '../history/transfer_history_provider.dart';
 import 'transfer_service.dart';
+import 'web_saver.dart';
 
 /// In-app link-mode receive (ADR-0010) — same conceptual flow as the
 /// authed [ReceiveScreen], but auth-less and using the URL fragment
@@ -126,6 +128,8 @@ class _LinkReceiveScreenState extends ConsumerState<LinkReceiveScreen> {
   }
 
   Future<void> _resolveExternalBaseDir() async {
+    // Web has no filesystem — see [ReceiveScreen] for the same guard.
+    if (kIsWeb) return;
     try {
       final base = Platform.isAndroid
           ? await getExternalStorageDirectory()
@@ -249,10 +253,17 @@ class _LinkReceiveScreenState extends ConsumerState<LinkReceiveScreen> {
     });
     String? savedPath;
     try {
-      if (decrypted.plaintextLength > _saveBytesWarnThreshold) {
+      if (kIsWeb) {
+        savedPath = await saveBytesWeb(
+          bytes: decrypted.plaintextBytes!,
+          filename: decrypted.filename,
+          mimeType: decrypted.mime,
+        );
+        if (savedPath == null) return;
+      } else if (decrypted.plaintextLength > _saveBytesWarnThreshold) {
         savedPath = await _saveLargeFile(decrypted);
       } else {
-        final bytes = await File(decrypted.plaintextPath).readAsBytes();
+        final bytes = await File(decrypted.plaintextPath!).readAsBytes();
         final result = await FilePicker.platform.saveFile(
           dialogTitle: 'Save decrypted file',
           fileName: decrypted.filename,
@@ -289,14 +300,14 @@ class _LinkReceiveScreenState extends ConsumerState<LinkReceiveScreen> {
     }
     try {
       await saf.writeFileToUri(
-        sourcePath: decrypted.plaintextPath,
+        sourcePath: decrypted.plaintextPath!,
         uri: destination.uri,
       );
     } on SafSaveWriteException catch (exc) {
       setState(() => _error = 'SAF save failed: ${exc.message}');
       return _saveToExternalStorage(decrypted);
     }
-    await _deleteIfExists(decrypted.plaintextPath);
+    await _deleteIfExists(decrypted.plaintextPath!);
     return destination.displayName;
   }
 
@@ -322,8 +333,8 @@ class _LinkReceiveScreenState extends ConsumerState<LinkReceiveScreen> {
     }
     final finalPath = await _uniquePath(saveDir.path, decrypted.filename);
     try {
-      await File(decrypted.plaintextPath).copy(finalPath);
-      await _deleteIfExists(decrypted.plaintextPath);
+      await File(decrypted.plaintextPath!).copy(finalPath);
+      await _deleteIfExists(decrypted.plaintextPath!);
     } on Object catch (exc) {
       await _deleteIfExists(finalPath);
       setState(() => _error = 'Save failed: $exc');

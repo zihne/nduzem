@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
@@ -11,6 +12,7 @@ import '../auth/auth_providers.dart';
 import '../history/transfer_history_entry.dart';
 import '../history/transfer_history_provider.dart';
 import 'transfer_service.dart';
+import 'web_saver.dart';
 
 /// Four-stage flow (spec §5.3), post-M4 streaming (ADR-0006):
 ///
@@ -68,6 +70,10 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
   }
 
   Future<void> _resolveExternalBaseDir() async {
+    // Web has no filesystem — the browser drops downloads into the
+    // user's default folder (or wherever FSA sends them). Nothing to
+    // resolve.
+    if (kIsWeb) return;
     try {
       final base = Platform.isAndroid
           ? await getExternalStorageDirectory()
@@ -150,19 +156,31 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
     });
     String? savedPath;
     try {
-      // Big files on Android go through the native SAF stream-save
-      // (ADR-0008): user picks a `content://` URI, we stream-copy the
-      // plaintext temp into it via ContentResolver on the platform
-      // thread — peak heap ≈ 64 KiB. On iOS the plugin declines
-      // (pickSaveUri → null), so we route to `_saveToExternalStorage`
-      // which drops the file into the app-documents dir.
-      if (decrypted.plaintextLength > _saveBytesWarnThreshold) {
+      if (kIsWeb) {
+        // Web save: File System Access API (Chromium) with an
+        // `<a download>` fallback for browsers that don't ship it.
+        // Peak memory = plaintextBytes size, already accepted at
+        // decrypt time.
+        savedPath = await saveBytesWeb(
+          bytes: decrypted.plaintextBytes!,
+          filename: decrypted.filename,
+          mimeType: decrypted.mime,
+        );
+        if (savedPath == null) return;
+      } else if (decrypted.plaintextLength > _saveBytesWarnThreshold) {
+        // Big files on Android go through the native SAF stream-save
+        // (ADR-0008): user picks a `content://` URI, we stream-copy
+        // the plaintext temp into it via ContentResolver on the
+        // platform thread — peak heap ≈ 64 KiB. On iOS the plugin
+        // declines (pickSaveUri → null), so we route to
+        // `_saveToExternalStorage` which drops the file into the
+        // app-documents dir.
         savedPath = await _saveLargeFile(decrypted);
       } else {
         // Small-file fast path: `file_picker.saveFile(bytes:)` uses
         // SAF on Android and iOS document picker on iOS. Peak
         // memory = plaintext size (once); fine for < 200 MiB.
-        final bytes = await File(decrypted.plaintextPath).readAsBytes();
+        final bytes = await File(decrypted.plaintextPath!).readAsBytes();
         final result = await FilePicker.platform.saveFile(
           dialogTitle: 'Save decrypted file',
           fileName: decrypted.filename,
@@ -237,7 +255,7 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
     }
     try {
       await saf.writeFileToUri(
-        sourcePath: decrypted.plaintextPath,
+        sourcePath: decrypted.plaintextPath!,
         uri: destination.uri,
       );
     } on SafSaveWriteException catch (exc) {
@@ -249,7 +267,7 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
     }
     // Success. Drop the plaintext temp file to reclaim cache space —
     // the fallback path does the same after its File.copy.
-    await _deleteIfExists(decrypted.plaintextPath);
+    await _deleteIfExists(decrypted.plaintextPath!);
     return destination.displayName;
   }
 
@@ -288,9 +306,9 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
     }
     final finalPath = await _uniquePath(saveDir.path, decrypted.filename);
     try {
-      await File(decrypted.plaintextPath).copy(finalPath);
+      await File(decrypted.plaintextPath!).copy(finalPath);
       // Copy succeeded — drop the source temp file to reclaim space.
-      await _deleteIfExists(decrypted.plaintextPath);
+      await _deleteIfExists(decrypted.plaintextPath!);
     } on Object catch (exc) {
       // Best-effort: try to remove a half-written destination if the
       // copy died partway.

@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'file_crypto.dart' show FileCrypto;
 
@@ -93,6 +94,60 @@ class FilePlaintextDestination implements PlaintextDestination {
     } on Object {
       // ignore
     }
+  }
+
+  @override
+  int get bytesWritten => _bytesWritten;
+}
+
+/// In-memory [PlaintextDestination] that accumulates chunks into a
+/// single `Uint8List` (ADR-0013 Phase 6). Web receive uses this
+/// because the browser has no filesystem — the assembled bytes get
+/// handed to a File System Access API writer or an `<a download>`
+/// blob URL at save time.
+///
+/// Peak memory here is the whole plaintext size, once — a genuine
+/// cost of the browser environment until the streaming FSA save path
+/// lands as a Phase 7 polish. On mobile prefer [FilePlaintextDestination]
+/// which keeps memory bounded to a single chunk.
+class BlobPlaintextDestination implements PlaintextDestination {
+  BlobPlaintextDestination();
+
+  final BytesBuilder _buffer = BytesBuilder(copy: false);
+  int _bytesWritten = 0;
+  bool _closed = false;
+  Uint8List? _bytes;
+
+  /// Assembled plaintext. Only valid after [close] — reading earlier
+  /// throws because the accumulator hasn't finalised its buffer yet.
+  Uint8List get bytes {
+    final b = _bytes;
+    if (b == null) {
+      throw StateError(
+        'BlobPlaintextDestination: bytes read before close()',
+      );
+    }
+    return b;
+  }
+
+  @override
+  Future<void> add(List<int> chunk) async {
+    _buffer.add(chunk);
+    _bytesWritten += chunk.length;
+  }
+
+  @override
+  Future<void> close() async {
+    if (_closed) return;
+    _closed = true;
+    _bytes = _buffer.takeBytes();
+  }
+
+  @override
+  Future<void> discard() async {
+    _buffer.clear();
+    _bytes = null;
+    _closed = true;
   }
 
   @override
