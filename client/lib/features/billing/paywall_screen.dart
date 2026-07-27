@@ -161,14 +161,24 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
               ),
             ],
             const SizedBox(height: 24),
-            _CatalogSection(
-              catalog: _catalog,
-              playAvailableSkus: _playAvailableSkus,
-              onBuy: _buy,
-              purchasingSku: _purchasingSku,
-            ),
-            const SizedBox(height: 24),
-            _ModeNoticeCard(usingStubFlow: _usingStubFlow),
+            // Web has no Play Billing / StoreKit — nudge users to the
+            // mobile app for purchases. Google/Apple's IAP handles
+            // tax remittance in most jurisdictions so keeping the
+            // purchase flow mobile-only sidesteps a stack of VAT/GST
+            // compliance work. Balance card above still shows so web
+            // users can see what they have.
+            if (kIsWeb)
+              const _MobileAppNudgeCard()
+            else ...[
+              _CatalogSection(
+                catalog: _catalog,
+                playAvailableSkus: _playAvailableSkus,
+                onBuy: _buy,
+                purchasingSku: _purchasingSku,
+              ),
+              const SizedBox(height: 24),
+              _ModeNoticeCard(usingStubFlow: _usingStubFlow),
+            ],
           ],
         ),
       ),),
@@ -390,6 +400,57 @@ class _ModeNoticeCard extends StatelessWidget {
         child: Text(
           text,
           style: Theme.of(context).textTheme.bodySmall,
+        ),
+      ),
+    );
+  }
+}
+
+/// Web paywall body — Play Billing / StoreKit don't exist in the
+/// browser, so instead of the STUB purchase flow we point users at
+/// the mobile app where real IAP works. Google + Apple handle tax
+/// remittance for us there.
+class _MobileAppNudgeCard extends StatelessWidget {
+  const _MobileAppNudgeCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.smartphone_outlined,
+                  color: theme.colorScheme.primary,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Buy credits in the mobile app',
+                  style: theme.textTheme.titleMedium,
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Web sends work exactly the same as mobile — same '
+              'end-to-end encryption, same recipient flow. But purchases '
+              "live in the mobile app so Google and Apple's in-app "
+              'purchase handles VAT / sales tax for you.',
+              style: theme.textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Install OpaqueShare on Android or iOS, sign in with the '
+              'same account, top up your credits there — the balance '
+              'shows up here on your next page load.',
+              style: theme.textTheme.bodySmall,
+            ),
+          ],
         ),
       ),
     );
