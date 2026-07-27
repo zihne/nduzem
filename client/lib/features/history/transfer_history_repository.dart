@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path_provider/path_provider.dart';
 
 import 'transfer_history_entry.dart';
@@ -29,6 +30,13 @@ import 'transfer_history_entry.dart';
 /// file does, the legacy file is renamed to the scoped path — the
 /// currently-signed-in user inherits the history that was accumulated
 /// under the single-slot storage model. Idempotent.
+///
+/// **Web.** `path_provider` doesn't implement
+/// `getApplicationDocumentsDirectory` in the browser, so the whole
+/// filesystem-based storage layer is a no-op on web: `readAll()`
+/// returns `[]`, `log()` / `remove()` / `clearAll()` return early
+/// without error. The History screen renders empty on web. Proper
+/// browser-side persistence (localStorage / IndexedDB) is a follow-up.
 class TransferHistoryRepository {
   TransferHistoryRepository({
     this.userId,
@@ -79,6 +87,7 @@ class TransferHistoryRepository {
   /// doesn't exist, the schema version doesn't match this build, or
   /// there's no active session.
   Future<List<TransferHistoryEntry>> readAll() async {
+    if (kIsWeb) return const [];
     await _migrateIfNeeded();
     final f = await _file();
     if (f == null) return const [];
@@ -105,6 +114,7 @@ class TransferHistoryRepository {
   /// Prepend a new entry; trim to [maxEntries] if we've grown past it.
   /// No-op when no session is active.
   Future<List<TransferHistoryEntry>> log(TransferHistoryEntry entry) async {
+    if (kIsWeb) return const [];
     if (userId == null) return const [];
     final current = await readAll();
     final next = [entry, ...current];
@@ -118,6 +128,7 @@ class TransferHistoryRepository {
   /// Remove one entry by `transferId`. No-op when the id isn't
   /// present or no session is active.
   Future<List<TransferHistoryEntry>> remove(String transferId) async {
+    if (kIsWeb) return const [];
     if (userId == null) return const [];
     final current = await readAll();
     final next = current.where((e) => e.transferId != transferId).toList();
@@ -130,6 +141,7 @@ class TransferHistoryRepository {
   /// rather than deleting it — subsequent reads still work without
   /// touching the FS. No-op when no session is active.
   Future<void> clearAll() async {
+    if (kIsWeb) return;
     if (userId == null) return;
     await _writeAll(const []);
   }
