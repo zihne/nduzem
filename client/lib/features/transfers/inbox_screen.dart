@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../api/api_client.dart';
 import '../../api/transfers_api.dart';
 import '../auth/auth_providers.dart';
+import '../../widgets/max_width_content.dart';
 
 /// Shows the caller's inbox — every uploaded transfer where they are the
 /// recipient. Refreshes via a Riverpod FutureProvider; pull-to-refresh
@@ -29,8 +30,7 @@ class InboxViewData {
   final Set<String> verifiedSenders;
 }
 
-final inboxProvider =
-    FutureProvider.autoDispose<InboxViewData>((ref) async {
+final inboxProvider = FutureProvider.autoDispose<InboxViewData>((ref) async {
   final svc = await ref.watch(transferServiceProvider.future);
   final items = await svc.inbox();
 
@@ -62,7 +62,8 @@ class InboxScreen extends ConsumerWidget {
           ),
         ],
       ),
-      body: RefreshIndicator(
+      body: MaxWidthContent(
+          child: RefreshIndicator(
         onRefresh: () async => ref.invalidate(inboxProvider),
         child: inbox.when(
           loading: () => const Center(child: CircularProgressIndicator()),
@@ -81,7 +82,7 @@ class InboxScreen extends ConsumerWidget {
                   },
                 ),
         ),
-      ),
+      ),),
     );
   }
 }
@@ -96,9 +97,8 @@ class _InboxTile extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return ListTile(
       leading: CircleAvatar(
-        backgroundColor: senderVerified
-            ? scheme.primaryContainer
-            : scheme.errorContainer,
+        backgroundColor:
+            senderVerified ? scheme.primaryContainer : scheme.errorContainer,
         child: Icon(
           senderVerified ? Icons.verified_user : Icons.help_outline,
           color: senderVerified

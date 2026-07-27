@@ -6,6 +6,7 @@ import '../../api/api_client.dart';
 import '../../widgets/password_form_field.dart';
 import 'auth_providers.dart';
 import 'auth_repository.dart';
+import '../../widgets/max_width_content.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -76,7 +77,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Sign in')),
-      body: Padding(
+      body: MaxWidthContent(
+          child: Padding(
         padding: const EdgeInsets.all(16),
         child: Form(
           key: _form,
@@ -88,8 +90,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 keyboardType: TextInputType.emailAddress,
                 autofillHints: const [AutofillHints.email],
                 decoration: const InputDecoration(labelText: 'Email'),
-                validator: (v) =>
-                    (v == null || !v.contains('@')) ? 'Enter a valid email.' : null,
+                validator: (v) => (v == null || !v.contains('@'))
+                    ? 'Enter a valid email.'
+                    : null,
               ),
               const SizedBox(height: 12),
               PasswordFormField(
@@ -130,7 +133,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             ],
           ),
         ),
-      ),
+      ),),
     );
   }
 }

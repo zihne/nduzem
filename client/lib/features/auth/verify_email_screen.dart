@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../api/api_client.dart';
 import 'auth_providers.dart';
+import '../../widgets/max_width_content.dart';
 
 /// Two verification paths, matching the server's `VerifyEmailRequest`
 /// (spec M1.5):
@@ -132,7 +133,8 @@ class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Verify email')),
-      body: Padding(
+      body: MaxWidthContent(
+          child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -185,7 +187,7 @@ class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
             ],
           ],
         ),
-      ),
+      ),),
     );
   }
 }

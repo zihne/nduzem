@@ -18,6 +18,7 @@ import '../history/transfer_history_entry.dart';
 import '../history/transfer_history_provider.dart';
 import 'transfer_service.dart';
 import 'web_saver.dart';
+import '../../widgets/max_width_content.dart';
 
 /// In-app link-mode receive (ADR-0010) — same conceptual flow as the
 /// authed [ReceiveScreen], but auth-less and using the URL fragment
@@ -48,8 +49,7 @@ class LinkReceiveScreen extends ConsumerStatefulWidget {
   final String fileKeyB64Url;
 
   @override
-  ConsumerState<LinkReceiveScreen> createState() =>
-      _LinkReceiveScreenState();
+  ConsumerState<LinkReceiveScreen> createState() => _LinkReceiveScreenState();
 }
 
 const int _saveBytesWarnThreshold = 200 * 1024 * 1024;
@@ -120,8 +120,7 @@ class _LinkReceiveScreenState extends ConsumerState<LinkReceiveScreen> {
       final padded = raw + '=' * ((4 - raw.length % 4) % 4);
       _fileKey = Uint8List.fromList(base64Url.decode(padded));
     } on Object {
-      _fragmentError =
-          'This link\'s decryption key is malformed. The URL '
+      _fragmentError = 'This link\'s decryption key is malformed. The URL '
           'fragment isn\'t valid base64url — the link may have been '
           'corrupted in transit.';
     }
@@ -242,6 +241,7 @@ class _LinkReceiveScreenState extends ConsumerState<LinkReceiveScreen> {
 
   void _cancelDownload() {
     _cancel?.cancel();
+    if (mounted) setState(() {});
   }
 
   Future<void> _saveAs() async {
@@ -407,12 +407,13 @@ class _LinkReceiveScreenState extends ConsumerState<LinkReceiveScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Receive a shared file')),
-      body: SafeArea(
+      body: MaxWidthContent(
+          child: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: ListView(children: _body(context)),
         ),
-      ),
+      ),),
     );
   }
 
@@ -512,11 +513,9 @@ class _LinkReceiveScreenState extends ConsumerState<LinkReceiveScreen> {
           obscureText: true,
           decoration: InputDecoration(
             labelText: 'Link password',
-            helperText:
-                'The sender shared this password out-of-band '
+            helperText: 'The sender shared this password out-of-band '
                 '(not in the link itself).',
-            errorText:
-                _passwordRejected ? 'Password incorrect.' : null,
+            errorText: _passwordRejected ? 'Password incorrect.' : null,
           ),
         ),
         const SizedBox(height: 12),
@@ -536,9 +535,20 @@ class _LinkReceiveScreenState extends ConsumerState<LinkReceiveScreen> {
       if (_busy) ...[
         const SizedBox(height: 8),
         OutlinedButton.icon(
-          onPressed: _cancelDownload,
-          icon: const Icon(Icons.cancel),
-          label: const Text('Cancel'),
+          // See send_screen — "Cancelling…" state for the gap between
+          // click and the receive loop's next checkpoint.
+          onPressed:
+              (_cancel?.isCancelled ?? false) ? null : _cancelDownload,
+          icon: (_cancel?.isCancelled ?? false)
+              ? const SizedBox(
+                  height: 16,
+                  width: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.cancel),
+          label: Text(
+            (_cancel?.isCancelled ?? false) ? 'Cancelling…' : 'Cancel',
+          ),
         ),
       ],
       if (_error != null) ...[

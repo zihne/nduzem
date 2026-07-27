@@ -7,6 +7,7 @@ import '../../api/api_client.dart';
 import '../../api/billing_api.dart';
 import '../auth/auth_providers.dart';
 import 'iap_purchase_service.dart';
+import '../../widgets/max_width_content.dart';
 
 /// M3.1/M3.2/M3.3 client-side surface — one screen that:
 ///
@@ -140,7 +141,8 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Storage & credits')),
-      body: RefreshIndicator(
+      body: MaxWidthContent(
+          child: RefreshIndicator(
         onRefresh: _refresh,
         child: ListView(
           padding: const EdgeInsets.all(16),
@@ -169,7 +171,7 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
             _ModeNoticeCard(usingStubFlow: _usingStubFlow),
           ],
         ),
-      ),
+      ),),
     );
   }
 }

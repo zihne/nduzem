@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../api/api_client.dart';
+import '../../widgets/max_width_content.dart';
 import 'send_queue.dart';
 
 /// Batch send progress + completion surface (ADR-0009).
@@ -33,19 +34,21 @@ class BatchSendScreen extends ConsumerWidget {
         // them to Home via the router.
         automaticallyImplyLeading: state?.isDone ?? true,
       ),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: state == null
-              ? const Center(
-                  child: Text(
-                    'No batch in flight. Pick files on the send screen '
-                    'to start one.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontStyle: FontStyle.italic),
-                  ),
-                )
-              : _BatchBody(state: state),
+      body: MaxWidthContent(
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: state == null
+                ? const Center(
+                    child: Text(
+                      'No batch in flight. Pick files on the send screen '
+                      'to start one.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontStyle: FontStyle.italic),
+                    ),
+                  )
+                : _BatchBody(state: state),
+          ),
         ),
       ),
     );

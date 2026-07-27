@@ -7,6 +7,7 @@ import '../../crypto/fingerprint.dart';
 import '../auth/auth_providers.dart';
 import '../auth/auth_repository.dart';
 import 'fingerprint_qr_sheet.dart';
+import '../../widgets/max_width_content.dart';
 
 /// `Signed in as` line. Both fields are optional in [AuthSession]:
 ///   - email + handle → `alice@example.com (@alice)`
@@ -58,7 +59,8 @@ class HomeScreen extends ConsumerWidget {
           ),
         ],
       ),
-      body: Padding(
+      body: MaxWidthContent(
+          child: Padding(
         padding: const EdgeInsets.all(16),
         child: session.when(
           loading: () => const Center(child: CircularProgressIndicator()),
@@ -67,9 +69,8 @@ class HomeScreen extends ConsumerWidget {
             if (data == null) {
               return const Text('Not signed in.');
             }
-            final fingerprint = data.fingerprint.isEmpty
-                ? null
-                : Fingerprint(data.fingerprint);
+            final fingerprint =
+                data.fingerprint.isEmpty ? null : Fingerprint(data.fingerprint);
             return ListView(
               children: [
                 Text(
@@ -164,7 +165,7 @@ class HomeScreen extends ConsumerWidget {
             );
           },
         ),
-      ),
+      ),),
     );
   }
 }
