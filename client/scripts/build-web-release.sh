@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+#
+# build-web-release.sh — build the Flutter web bundle ready to rsync
+# to prod. Web mirror of build-release.sh (which produces the Android
+# AAB). Fewer post-flight checks because the web bundle isn't signed
+# and there's no store review to trip.
+#
+# What it does, in order:
+#   1. Verify Flutter is on PATH.
+#   2. `flutter clean` — drop stale build artefacts.
+#   3. `flutter pub get` — fetch deps.
+#   4. `flutter analyze` — must be clean.
+#   5. `flutter test` — full suite must pass.
+#   6. `flutter build web --release` with the API + share dart-defines.
+#   7. Verify `build/web/index.html` came out.
+#   8. Print bundle path, size, entrypoint hash, and next steps
+#      (rsync target + Caddy reload if the vhost is new).
+#
+# Exit code 0 means `client/build/web/` is ready to rsync. Any
+# non-zero exit is a hard failure with a message on stderr.
+#
+# Usage:
+#   scripts/build-web-release.sh [OPAQUESHARE_API_BASE] [OPAQUESHARE_SHARE_URL_BASE]
+#
+# Or via env var:
+#   OPAQUESHARE_API_BASE=https://api.opaqueshare.com scripts/build-web-release.sh
+#
+# The API base MUST be an https:// URL for a production build. The
+# script warns (but doesn't fail) on http:// so you can still run it
+# against a local tunnel for pre-flight testing.
+
+set -euo pipefail
+
+# --- terminal colours (auto-disabled when piped) --------------------
+if [[ -t 1 ]]; then
+    C_RED=$'\033[0;31m'
+    C_GREEN=$'\033[0;32m'
+    C_YELLOW=$'\033[0;33m'
+    C_BLUE=$'\033[0;34m'
+    C_BOLD=$'\033[1m'
+    C_RESET=$'\033[0m'
+else
+    C_RED=''
+    C_GREEN=''
+    C_YELLOW=''
+    C_BLUE=''
+    C_BOLD=''
+    C_RESET=''
+fi
+
+say()  { printf '%s==>%s %s\n' "$C_BLUE" "$C_RESET" "$*"; }
+ok()   { printf '%s✓%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
+warn() { printf '%s⚠%s %s\n' "$C_YELLOW" "$C_RESET" "$*"; }
+fail() {
+    printf '%s✗ %s%s\n' "$C_RED" "$*" "$C_RESET" >&2
+    exit 1
+}
+
+# --- resolve arguments -----------------------------------------------
+API_BASE="${1:-${OPAQUESHARE_API_BASE:-}}"
+if [[ -z "$API_BASE" ]]; then
+    fail "OPAQUESHARE_API_BASE is required.
+
+Usage:
+  scripts/build-web-release.sh https://api.opaqueshare.com [https://opaqueshare.com]
+
+Or:
+  export OPAQUESHARE_API_BASE=https://api.opaqueshare.com
+  scripts/build-web-release.sh"
+fi
+
+case "$API_BASE" in
+    https://*) ;;
+    http://*)  warn "API base is http:// — release builds should use https:// in production." ;;
+    *)         fail "API base must be a full URL (starts with http:// or https://). Got: $API_BASE" ;;
+esac
+
+# Share URL base — same derivation as build-release.sh so the two
+# scripts stay in lockstep on how they compute defaults.
+SHARE_URL_BASE="${2:-${OPAQUESHARE_SHARE_URL_BASE:-}}"
+if [[ -z "$SHARE_URL_BASE" ]]; then
+    SHARE_URL_BASE="${API_BASE/\/\/api./\/\/}"
+    if [[ "$SHARE_URL_BASE" == "$API_BASE" ]]; then
+        warn "Could not derive a share URL base from API base — no 'api.' prefix.
+Falling back to the API base as the share host. Set
+OPAQUESHARE_SHARE_URL_BASE explicitly if this is wrong for your setup."
+    fi
+fi
+
+case "$SHARE_URL_BASE" in
+    https://*|http://*) ;;
+    *) fail "Share URL base must be a full URL. Got: $SHARE_URL_BASE" ;;
+esac
+
+# --- work from the client-repo root ----------------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLIENT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$CLIENT_ROOT"
+
+# --- 1. Flutter available --------------------------------------------
+say "Checking Flutter is on PATH…"
+command -v flutter >/dev/null || fail "flutter not on PATH."
+flutter --version | head -1
+ok "Flutter ready"
+
+# --- 2. Clean --------------------------------------------------------
+say "flutter clean…"
+flutter clean >/dev/null
+ok "clean done"
+
+# --- 3. Deps ---------------------------------------------------------
+say "flutter pub get…"
+flutter pub get >/dev/null
+ok "deps resolved"
+
+# --- 4. Analyze ------------------------------------------------------
+say "flutter analyze…"
+if ! flutter analyze; then
+    fail "analyze failed. Fix the reported issues before releasing."
+fi
+ok "analyze clean"
+
+# --- 5. Tests --------------------------------------------------------
+say "flutter test (full suite)…"
+if ! flutter test; then
+    fail "tests failed. Fix before releasing."
+fi
+ok "tests pass"
+
+# --- 6. Build web bundle ---------------------------------------------
+say "Building release web bundle with:"
+say "  API base:   $API_BASE"
+say "  Share URL:  $SHARE_URL_BASE"
+flutter build web --release \
+    --dart-define=OPAQUESHARE_API_BASE="$API_BASE" \
+    --dart-define=OPAQUESHARE_SHARE_URL_BASE="$SHARE_URL_BASE"
+
+BUNDLE_DIR="$CLIENT_ROOT/build/web"
+if [[ ! -f "$BUNDLE_DIR/index.html" ]]; then
+    fail "build produced no bundle at $BUNDLE_DIR (missing index.html)"
+fi
+ok "bundle produced"
+
+# --- 7. Summary + next steps -----------------------------------------
+BUNDLE_SIZE=$(du -sh "$BUNDLE_DIR" | cut -f1)
+FILE_COUNT=$(find "$BUNDLE_DIR" -type f | wc -l | tr -d ' ')
+
+# Grab the hashed main.dart.js name — different every build, useful
+# in the summary as a quick "is this actually a fresh build?" tell.
+MAIN_JS=$(find "$BUNDLE_DIR" -maxdepth 1 -name 'main.dart.js*' -not -name '*.map' 2>/dev/null \
+          | head -1 | xargs -I{} basename {})
+
+echo
+printf '%s%s✓ Web bundle ready%s\n' "$C_BOLD" "$C_GREEN" "$C_RESET"
+echo
+printf '  Path:         %s\n' "$BUNDLE_DIR"
+printf '  Size:         %s (%s files)\n' "$BUNDLE_SIZE" "$FILE_COUNT"
+printf '  API base:     %s\n' "$API_BASE"
+printf '  Share URL:    %s\n' "$SHARE_URL_BASE"
+[[ -n "$MAIN_JS" ]] && printf '  Entrypoint:   %s\n' "$MAIN_JS"
+echo
+echo "Next steps:"
+echo "  1. rsync the bundle to the prod box (adjust host + path):"
+echo "     rsync -av --delete build/web/ prod:/opt/opaqueshare-server/infra/www-app/"
+echo "  2. Caddy serves the new files immediately (bind-mount, live)."
+echo "     If the app.\$DOMAIN vhost is new, reload Caddy once:"
+echo "       docker compose -f infra/docker/docker-compose.prod.yml \\"
+echo "         exec caddy caddy reload --config /etc/caddy/Caddyfile"
+echo "  3. Verify:"
+echo "       curl -sI https://app.\$DOMAIN | head -1"
+echo "     Expect HTTP/2 200. Cert provisions on first request via ACME."
