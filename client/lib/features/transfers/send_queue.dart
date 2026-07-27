@@ -231,11 +231,16 @@ class SendQueueController extends Notifier<SendQueueState?> {
       items: _updateItem(
         startSnapshot.items,
         index,
+        // Initial state before the service's first onProgress fires
+        // (or if it never does because the file is trivially small).
+        // ADR-0013 Phase 7 polish: TransferService.send only emits
+        // preparing + uploading now — start on preparing so the item
+        // row reflects the pre-upload gap correctly.
         (it) => it.copyWith(
           status: QueueItemStatus.encrypting,
-          phase: SendPhase.encrypting,
+          phase: SendPhase.preparing,
           phaseDone: 0,
-          phaseTotal: startSnapshot.items[index].file.length,
+          phaseTotal: 0,
         ),
       ),
       currentCancel: cancel,
@@ -255,6 +260,9 @@ class SendQueueController extends Notifier<SendQueueState?> {
               snap.items,
               index,
               (it) => it.copyWith(
+                // Preparing keeps the item in "encrypting" state (the
+                // pre-upload gap looks similar to the user); flipping
+                // to "uploading" once the first upload progress fires.
                 status: phase == SendPhase.uploading
                     ? QueueItemStatus.uploading
                     : QueueItemStatus.encrypting,

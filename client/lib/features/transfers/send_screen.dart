@@ -889,10 +889,16 @@ class _SendProgress extends StatelessWidget {
     if (t != null && t > 0 && d != null) {
       value = (d / t).clamp(0.0, 1.0);
     }
+    // Only two active phases fire from TransferService.send now
+    // (ADR-0013 Phase 7 polish): preparing during /initiate, then
+    // uploading. The encrypting label is kept for the deprecated
+    // enum value so a fallback exists if any external caller still
+    // ships it.
     final phaseLabel = switch (phase) {
-      SendPhase.encrypting => 'Encrypting',
+      // ignore: deprecated_member_use_from_same_package
+      SendPhase.encrypting => 'Sending',
       SendPhase.preparing => 'Preparing upload',
-      SendPhase.uploading => 'Uploading',
+      SendPhase.uploading => 'Sending',
       null => 'Preparing…',
     };
     String label;

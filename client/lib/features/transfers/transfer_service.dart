@@ -110,11 +110,16 @@ class TransferService {
   /// [FileCrypto.estimateCiphertextLength] so the server can size the
   /// multipart plan before we've encrypted anything.
   ///
-  /// `onProgress` fires with `(phase, done, total)`:
-  ///   - `SendPhase.encrypting`: `done` = plaintext bytes read,
-  ///     `total` = `source.lengthBytes`.
-  ///   - `SendPhase.uploading`: `done` = ciphertext bytes PUT,
-  ///     `total` = precomputed ciphertext size.
+  /// `onProgress` fires with `(phase, done, total)`. Two phases:
+  ///   - `SendPhase.preparing`: indeterminate — `/initiate` round-trip.
+  ///     `done` and `total` are both 0.
+  ///   - `SendPhase.uploading`: `done` = ciphertext bytes committed to
+  ///     the wire so far; `total` = precomputed ciphertext size. This
+  ///     is the ONE progress signal for the send. Encryption is not
+  ///     surfaced separately because it interleaves with upload under
+  ///     the streaming pipeline (ADR-0013) — the two signals would
+  ///     oscillate. Under-hood encryption throughput is invisible
+  ///     because it's throttled by the network anyway.
   ///
   /// `cancel` is checked between plaintext-read chunks and between
   /// part PUTs. Cancels after `/initiate` POST `/abort` before
@@ -208,12 +213,16 @@ class TransferService {
       // parts open until the sweeper runs.
       try {
         onProgress?.call(SendPhase.uploading, 0, byteCount);
+        // Note: we deliberately do NOT wire encryptToStream's
+        // per-chunk onProgress to the caller. Encrypt is throttled by
+        // the network under the streaming pipeline (chunks are
+        // produced just-in-time to feed the next part PUT), so
+        // encrypted-bytes and uploaded-bytes track each other closely
+        // — surfacing both would oscillate the bar.
         final handle = _fileCrypto.encryptToStream(
           source: source,
           key: fileKey,
           throwIfCancelled: cancel?.throwIfCancelled,
-          onProgress: (done, total) =>
-              onProgress?.call(SendPhase.encrypting, done, total),
         );
 
         final List<CommitPart>? parts;
@@ -974,15 +983,27 @@ enum SendMode {
 
 /// Phases the send progresses through (ADR-0013 + ADR-0014).
 ///
-/// Under the streaming pipeline `encrypting` and `uploading` are
-/// interleaved (chunks encrypt → accumulate → PUT → next chunks…),
-/// so the UI should treat them as concurrent progress signals from
-/// the same underlying operation rather than sequential stages. The
-/// callback fires both event kinds during upload; pick whichever
-/// makes the progress bar feel more responsive.
+/// Two active phases + one legacy value kept for enum stability:
+///
+///   - [preparing] — indeterminate. `/initiate` round-trip.
+///   - [uploading] — determinate. Ciphertext bytes committed to the
+///     wire so far / total ciphertext size. This is the single
+///     progress figure for the send.
+///
+/// [encrypting] is no longer emitted from `TransferService.send`
+/// (ADR-0013 Phase 7 polish). Under the streaming pipeline encryption
+/// interleaves with upload — surfacing both signals oscillated the
+/// bar with no useful information. Encryption is throttled by the
+/// network anyway, so `uploaded_bytes` doubles as an accurate
+/// "how much of my file has left the device" figure. Kept in the
+/// enum so external consumers with the old `switch (phase)` shape
+/// still compile; new code should not match on it.
 enum SendPhase {
-  /// Plaintext bytes read from the source. `done` = plaintext bytes
-  /// hashed + fed into secretstream; `total` = `source.lengthBytes`.
+  /// **Deprecated** — no longer fired. See enum-level docstring.
+  @Deprecated(
+    'No longer emitted — the send bar shows a single upload figure. '
+    'Match on preparing / uploading only.',
+  )
   encrypting,
 
   /// Pre-upload gap: sealing K_file, reading signing key, POSTing
@@ -991,10 +1012,10 @@ enum SendPhase {
   /// indeterminate; `done` and `total` are both 0.
   preparing,
 
-  /// Ciphertext bytes PUT to object storage. `done` = uploaded so
-  /// far; `total` = precomputed ciphertext byte_count. Under the
-  /// streaming pipeline this can overlap with `encrypting` because
-  /// each part is uploaded as its chunks emerge.
+  /// Ciphertext bytes committed to the wire. `done` = uploaded so
+  /// far; `total` = precomputed ciphertext byte_count. Fires
+  /// continuously from the first byte of the first part until the
+  /// last part's PUT completes.
   uploading,
 }
 
