@@ -75,15 +75,19 @@ class TransferService {
 
   // --- SEND -------------------------------------------------------------
 
-  /// Encrypt, upload, and commit a transfer. Streaming from disk:
-  /// plaintext is read chunk-by-chunk from `source` through
-  /// secretstream into a temp file, then that temp file is uploaded
-  /// part-by-part (multipart) or in one shot (< 5 MiB). Peak memory
-  /// ≈ 8 MiB regardless of file size (ADR-0004).
+  /// Encrypt, upload, and commit a transfer using the streaming
+  /// pipeline (ADR-0013 + ADR-0014).
+  ///
+  /// Ciphertext is produced chunk-by-chunk from `source` via
+  /// [FileCrypto.encryptToStream] and interleaved with the object-
+  /// storage PUT: each 5 MiB accumulated buffer becomes a multipart
+  /// part (or the whole ciphertext becomes one PUT under the
+  /// threshold). No temp file. Peak memory ≈ `part_size` (~5 MiB)
+  /// regardless of file size.
   ///
   /// `source` (ADR-0013) is the platform-neutral input:
   /// [FilePlaintextSource] on mobile (backed by a file path);
-  /// [BytesPlaintextSource] for in-memory payloads; a future
+  /// [BytesPlaintextSource] for in-memory payloads;
   /// `BlobPlaintextSource` on web. Filename, MIME, and total
   /// plaintext length all come off `source`.
   ///
@@ -97,11 +101,18 @@ class TransferService {
   ///     in the URL fragment (`<origin>/r/<id>#<K_file>`). Optional
   ///     `linkPassword` gates the download on the server side.
   ///
+  /// **Contract change (ADR-0014)**: `blob_sha256`, `enc_header`,
+  /// `signature`, and (app-mode) `wrapped_key` are sent at `/commit`
+  /// once the streaming encryption has drained. The client precomputes
+  /// `byte_count` for `/initiate` via
+  /// [FileCrypto.estimateCiphertextLength] so the server can size the
+  /// multipart plan before we've encrypted anything.
+  ///
   /// `onProgress` fires with `(phase, done, total)`:
   ///   - `SendPhase.encrypting`: `done` = plaintext bytes read,
   ///     `total` = `source.lengthBytes`.
   ///   - `SendPhase.uploading`: `done` = ciphertext bytes PUT,
-  ///     `total` = final ciphertext size.
+  ///     `total` = precomputed ciphertext size.
   ///
   /// `cancel` is checked between plaintext-read chunks and between
   /// part PUTs. Cancels after `/initiate` POST `/abort` before
@@ -124,56 +135,27 @@ class TransferService {
     // for minutes; if the user pockets the phone the screen goes off
     // and Android's Doze can otherwise starve our upload of CPU /
     // network. Wakelock keeps the CPU awake even with the screen
-    // off. It does NOT protect against the App Freezer if the user
-    // switches to a different app — that's a foreground-service job
-    // (deferred). Wrap in try/catch so a platform without wakelock
-    // support (test host, headless CI) doesn't break the send.
+    // off. Wrap in try/catch so a platform without wakelock support
+    // (test host, headless CI, web) doesn't break the send.
     try {
       await WakelockPlus.enable();
     } on Object {
-      // ignore — upload works fine without a wakelock, just less
-      // resilient to screen-off scenarios.
+      // ignore
     }
     try {
       // 1. Fresh K_file for this transfer.
       final fileKey = _fileCrypto.generateFileKey();
 
-      // 2. Stream-encrypt plaintext → temp file, rolling SHA-256 in
-      // the same pass. Peak memory ≈ one 64 KiB secretstream chunk.
-      onProgress?.call(SendPhase.encrypting, 0, source.lengthBytes);
-      final tempDir = await getTemporaryDirectory();
-      final enc = await _fileCrypto.encryptFileToTempFile(
-        source: source,
-        key: fileKey,
-        tempDir: tempDir,
-        throwIfCancelled: cancel?.throwIfCancelled,
-        onProgress: (done, total) =>
-            onProgress?.call(SendPhase.encrypting, done, total),
-      );
+      // 2. Precompute the ciphertext byte_count so /initiate can size
+      // the multipart plan. Server re-measures at /commit and rejects
+      // on mismatch, so an incorrect estimate here fails loud, not
+      // silent.
+      final byteCount =
+          _fileCrypto.estimateCiphertextLength(source.lengthBytes);
 
-      final ciphertextFile = File(enc.ciphertextPath);
-      try {
-      // Post-encrypt / pre-upload phase — enc_header + seal + sign +
-      // /initiate. On a multi-GB file the /initiate call presigns
-      // ~700 URLs server-side and produces a ~90 KB response body,
-      // easily a few seconds. Fire an indeterminate phase so the UI
-      // doesn't sit at "Encrypting 100%" during that gap.
-      onProgress?.call(SendPhase.preparing, 0, 0);
-
-      // 3. Build enc_header (encrypted metadata blob). filename +
-      // mime + plaintextLength come off the PlaintextSource — same
-      // three values the caller previously passed as loose params.
-      final encHeader = _envelope.buildEncHeader(
-        filename: source.filename,
-        mime: source.mimeType,
-        plaintextLength: source.lengthBytes,
-        blobSha256Hex: enc.blobSha256Hex,
-        fileKey: fileKey,
-      );
-
-      // 4. Seal K_file for the recipient (crypto_box_seal) — app
-      // mode only. In link mode K_file rides in the URL fragment;
-      // the server never sees it.
+      // 3. Seal K_file for the recipient (crypto_box_seal) — app
+      // mode only. Independent of ciphertext, so it can happen before
+      // the stream starts.
       String? wrappedKeyB64;
       if (mode == SendMode.app) {
         final sealed = _sealedBox.seal(
@@ -183,12 +165,10 @@ class TransferService {
         wrappedKeyB64 = base64Encode(sealed);
       }
 
-      // 5. Sign blob_sha256 with our Ed25519 signing_priv. Wire shape
-      // is identical across modes; the web decrypt page ignores the
-      // signature (ADR-0035) but a future authenticated-link feature
-      // could verify it. ADR-0011: signing_priv lives in a userId-
-      // scoped slot so a second account on this device doesn't clobber
-      // it.
+      // 4. Read signing_priv up front so we don't discover a missing
+      // key half-way through a multi-GB upload. ADR-0011: signing_priv
+      // lives in a userId-scoped slot so a second account on this
+      // device doesn't clobber it.
       final activeUserId = await _storage.read(SecureStore.kUserId);
       if (activeUserId == null) {
         throw StateError(
@@ -208,53 +188,81 @@ class TransferService {
           'was originally registered.',
         );
       }
-      final signature = _envelope.signBlobSha256(
-        blobSha256Hex: enc.blobSha256Hex,
-        signingPrivate: signingPriv,
-      );
 
-      // 6. Initiate on the server. Response is either single-shot or
-      // multipart shape — same envelope, different upload path.
+      // 5. Initiate — new contract (no crypto metadata; server ADR-0037).
+      // Response is single-shot (upload_url) or multipart (parts plan).
+      onProgress?.call(SendPhase.preparing, 0, 0);
       final initiated = await _transfers.initiate(
         mode: mode == SendMode.app ? 'app' : 'link',
         recipientId: recipient?.userId,
-        wrappedKeyB64: wrappedKeyB64,
         linkPassword: linkPassword,
         recipientEmail: recipientEmail,
-        byteCount: enc.ciphertextLength,
-        blobSha256Hex: enc.blobSha256Hex,
-        encHeaderB64: base64Encode(encHeader),
-        signatureB64: base64Encode(signature),
+        byteCount: byteCount,
         maxDownloads: maxDownloads,
       );
 
-      // 7 + 8. Upload + commit. Anything from here that throws MUST
-      // call /abort on the multipart branch so R2 doesn't hold
-      // in-flight parts open until the server's 6-hour sweeper runs.
-      onProgress?.call(SendPhase.uploading, 0, enc.ciphertextLength);
+      // 6. Stream-encrypt + upload interleaved. Anything from here
+      // that throws MUST call /abort so R2 doesn't hold in-flight
+      // parts open until the sweeper runs.
       try {
-        final CommitTransferResponse committed;
+        onProgress?.call(SendPhase.uploading, 0, byteCount);
+        final handle = _fileCrypto.encryptToStream(
+          source: source,
+          key: fileKey,
+          throwIfCancelled: cancel?.throwIfCancelled,
+          onProgress: (done, total) =>
+              onProgress?.call(SendPhase.encrypting, done, total),
+        );
+
+        final List<CommitPart>? parts;
         if (initiated.multipart != null) {
-          committed = await _sendMultipartFromFile(
-            transferId: initiated.transferId,
-            ciphertextFile: ciphertextFile,
-            ciphertextLength: enc.ciphertextLength,
+          parts = await _streamToMultipart(
+            handle: handle,
             plan: initiated.multipart!,
+            byteCount: byteCount,
             onProgress: (up, total) =>
                 onProgress?.call(SendPhase.uploading, up, total),
             cancel: cancel,
           );
         } else {
-          committed = await _sendSingleShotFromFile(
-            transferId: initiated.transferId,
-            ciphertextFile: ciphertextFile,
-            ciphertextLength: enc.ciphertextLength,
+          parts = null;
+          await _streamToSingleShot(
+            handle: handle,
             uploadUrl: initiated.uploadUrl!,
+            byteCount: byteCount,
             onProgress: (up, total) =>
                 onProgress?.call(SendPhase.uploading, up, total),
             cancel: cancel,
           );
         }
+
+        // 7. Await the summary — blob_sha256 + actual ciphertext
+        // length. Only valid after the stream has fully drained,
+        // which the upload loops above guarantee.
+        final summary = await handle.done;
+
+        // 8. Build enc_header + sign — both need blob_sha256.
+        final encHeader = _envelope.buildEncHeader(
+          filename: source.filename,
+          mime: source.mimeType,
+          plaintextLength: source.lengthBytes,
+          blobSha256Hex: summary.blobSha256Hex,
+          fileKey: fileKey,
+        );
+        final signature = _envelope.signBlobSha256(
+          blobSha256Hex: summary.blobSha256Hex,
+          signingPrivate: signingPriv,
+        );
+
+        // 9. Commit with crypto metadata + parts.
+        final committed = await _transfers.commit(
+          initiated.transferId,
+          blobSha256Hex: summary.blobSha256Hex,
+          encHeaderB64: base64Encode(encHeader),
+          signatureB64: base64Encode(signature),
+          wrappedKeyB64: wrappedKeyB64,
+          parts: parts,
+        );
         return SendResult(
           mode: mode,
           transferId: initiated.transferId,
@@ -268,8 +276,7 @@ class TransferService {
         );
       } on Object {
         // Best-effort cleanup — a failure to abort still lets the
-        // orphan sweeper reclaim in the background. Don't swallow
-        // the outer exception, whatever it is.
+        // orphan sweeper reclaim in the background.
         try {
           await _transfers.abort(initiated.transferId);
         } on Object {
@@ -277,22 +284,7 @@ class TransferService {
         }
         rethrow;
       }
-      } finally {
-        // Always drop the temp ciphertext file — success, cancel, or
-        // failure. A process-kill leak is backstopped by the OS's
-        // own cache reclamation.
-        try {
-          if (await ciphertextFile.exists()) {
-            await ciphertextFile.delete();
-          }
-        } on Object {
-          // ignore
-        }
-      }
     } finally {
-      // Release the wakelock regardless of outcome. Wrap in try/catch
-      // so a platform without wakelock support doesn't turn a
-      // successful send into a failure.
       try {
         await WakelockPlus.disable();
       } on Object {
@@ -301,85 +293,108 @@ class TransferService {
     }
   }
 
-  Future<CommitTransferResponse> _sendSingleShotFromFile({
-    required String transferId,
-    required File ciphertextFile,
-    required int ciphertextLength,
+  /// Drain [handle.stream] into memory and PUT the whole ciphertext
+  /// in one request. Only used when the server's `/initiate` response
+  /// picked the single-shot branch (declared byte_count <= 5 MiB).
+  Future<void> _streamToSingleShot({
+    required EncryptStreamHandle handle,
     required String uploadUrl,
+    required int byteCount,
     required void Function(int, int)? onProgress,
     required CancelToken? cancel,
   }) async {
-    cancel?.throwIfCancelled();
-    // Under the 5 MiB threshold — fits comfortably in memory. Reading
-    // the whole file is simpler than a streamed PUT and avoids the
-    // `http.StreamedRequest` complications for a fast path that
-    // doesn't need them.
-    final body = await ciphertextFile.readAsBytes();
-    final putRes = await runWithNetworkErrorTranslation(
+    final buffer = BytesBuilder(copy: false);
+    await for (final chunk in handle.stream) {
+      cancel?.throwIfCancelled();
+      buffer.add(chunk);
+    }
+    final body = buffer.takeBytes();
+    final res = await runWithNetworkErrorTranslation(
       () => _httpClient.put(Uri.parse(uploadUrl), body: body),
     );
-    if (putRes.statusCode < 200 || putRes.statusCode >= 300) {
+    if (res.statusCode < 200 || res.statusCode >= 300) {
       throw ApiException(
-        statusCode: putRes.statusCode,
-        message: 'Upload to storage failed (HTTP ${putRes.statusCode}).',
+        statusCode: res.statusCode,
+        message: 'Upload to storage failed (HTTP ${res.statusCode}).',
       );
     }
-    onProgress?.call(ciphertextLength, ciphertextLength);
-
-    cancel?.throwIfCancelled();
-    return _transfers.commit(transferId);
+    onProgress?.call(body.length, byteCount);
   }
 
-  Future<CommitTransferResponse> _sendMultipartFromFile({
-    required String transferId,
-    required File ciphertextFile,
-    required int ciphertextLength,
+  /// Interleaved multipart uploader. Accumulates ciphertext chunks
+  /// into a `plan.partSize`-byte buffer; PUTs each part as soon as
+  /// it's full and captures the ETag; PUTs whatever remains as the
+  /// final part when the stream drains.
+  ///
+  /// Peak memory ≈ `plan.partSize` (~5 MiB) + one 64 KiB stream chunk.
+  /// Guards against a server plan mismatch by failing loudly if we
+  /// run out of URLs before the stream drains — unused trailing URLs
+  /// are silently dropped, which is safe (S3 `CompleteMultipartUpload`
+  /// only cares about the parts we actually reference).
+  Future<List<CommitPart>> _streamToMultipart({
+    required EncryptStreamHandle handle,
     required MultipartUploadPlan plan,
+    required int byteCount,
     required void Function(int, int)? onProgress,
     required CancelToken? cancel,
   }) async {
-    final raf = await ciphertextFile.open(mode: FileMode.read);
-    try {
-      final parts = <CommitPart>[];
-      var uploadedBytes = 0;
-      for (final partUrl in plan.parts) {
-        cancel?.throwIfCancelled();
-        final offset = (partUrl.partNumber - 1) * plan.partSize;
-        if (offset >= ciphertextLength) {
-          // Extra part URL beyond what we actually need. Safe skip.
-          continue;
-        }
-        final remaining = ciphertextLength - offset;
-        final len = remaining < plan.partSize ? remaining : plan.partSize;
-        await raf.setPosition(offset);
-        final body = await raf.read(len);
-        final res = await runWithNetworkErrorTranslation(
-          () => _httpClient.put(Uri.parse(partUrl.url), body: body),
-        );
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-          throw ApiException(
-            statusCode: res.statusCode,
-            message: 'Upload of part ${partUrl.partNumber} failed '
-                '(HTTP ${res.statusCode}).',
-          );
-        }
-        final etag = res.headers['etag'];
-        if (etag == null || etag.isEmpty) {
-          throw StateError(
-            'Object storage did not return an ETag for part '
-            '${partUrl.partNumber}; cannot commit multipart upload.',
-          );
-        }
-        parts.add(CommitPart(partNumber: partUrl.partNumber, etag: etag));
-        uploadedBytes += body.length;
-        onProgress?.call(uploadedBytes, ciphertextLength);
-      }
+    final parts = <CommitPart>[];
+    final urls = plan.parts;
+    var urlIdx = 0;
+    var uploaded = 0;
+    final buffer = BytesBuilder(copy: false);
 
+    Future<void> uploadOnePart(Uint8List body) async {
       cancel?.throwIfCancelled();
-      return _transfers.commit(transferId, parts: parts);
-    } finally {
-      await raf.close();
+      if (urlIdx >= urls.length) {
+        throw StateError(
+          'Ran out of multipart part URLs — client-declared byte_count '
+          'was smaller than the actual ciphertext size. Cannot commit.',
+        );
+      }
+      final url = urls[urlIdx];
+      final res = await runWithNetworkErrorTranslation(
+        () => _httpClient.put(Uri.parse(url.url), body: body),
+      );
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        throw ApiException(
+          statusCode: res.statusCode,
+          message: 'Upload of part ${url.partNumber} failed '
+              '(HTTP ${res.statusCode}).',
+        );
+      }
+      final etag = res.headers['etag'];
+      if (etag == null || etag.isEmpty) {
+        throw StateError(
+          'Object storage did not return an ETag for part '
+          '${url.partNumber}; cannot commit multipart upload.',
+        );
+      }
+      parts.add(CommitPart(partNumber: url.partNumber, etag: etag));
+      uploaded += body.length;
+      onProgress?.call(uploaded, byteCount);
+      urlIdx++;
     }
+
+    await for (final chunk in handle.stream) {
+      cancel?.throwIfCancelled();
+      buffer.add(chunk);
+      while (buffer.length >= plan.partSize) {
+        // Slice one full part off the front of the buffer; the
+        // remainder stays for the next iteration.
+        final all = buffer.takeBytes();
+        final partBody = Uint8List.sublistView(all, 0, plan.partSize);
+        await uploadOnePart(Uint8List.fromList(partBody));
+        if (all.length > plan.partSize) {
+          buffer.add(Uint8List.sublistView(all, plan.partSize));
+        }
+      }
+    }
+    // Final partial part.
+    if (buffer.length > 0) {
+      await uploadOnePart(buffer.takeBytes());
+    }
+    return parts;
   }
 
   // --- INBOX ------------------------------------------------------------
@@ -842,26 +857,29 @@ enum SendMode {
   link,
 }
 
-/// Phases the send progresses through (ADR-0004). The service-to-UI
-/// progress callback fires with the current phase so the screen can
-/// label it and reset the bar between phase transitions.
+/// Phases the send progresses through (ADR-0013 + ADR-0014).
+///
+/// Under the streaming pipeline `encrypting` and `uploading` are
+/// interleaved (chunks encrypt → accumulate → PUT → next chunks…),
+/// so the UI should treat them as concurrent progress signals from
+/// the same underlying operation rather than sequential stages. The
+/// callback fires both event kinds during upload; pick whichever
+/// makes the progress bar feel more responsive.
 enum SendPhase {
-  /// Streaming the plaintext through secretstream into a temp
-  /// ciphertext file. `done` = plaintext bytes read; `total` = the
-  /// declared plaintext length.
+  /// Plaintext bytes read from the source. `done` = plaintext bytes
+  /// hashed + fed into secretstream; `total` = `source.lengthBytes`.
   encrypting,
 
-  /// Post-encrypt, pre-upload gap: building `enc_header`, sealing
-  /// K_file, signing, and POSTing `/initiate` (which presigns one
-  /// URL per multipart part — non-trivial round-trip for a
-  /// multi-GB file with ~700 parts). Progress is indeterminate;
-  /// `done` and `total` are both 0.
+  /// Pre-upload gap: sealing K_file, reading signing key, POSTing
+  /// `/initiate` (which presigns one URL per multipart part —
+  /// non-trivial for a multi-GB file with ~700 parts). Progress is
+  /// indeterminate; `done` and `total` are both 0.
   preparing,
 
-  /// PUTting the temp ciphertext file to object storage — one part
-  /// at a time on the multipart branch, or one PUT on single-shot.
-  /// `done` = ciphertext bytes uploaded; `total` = final ciphertext
-  /// size.
+  /// Ciphertext bytes PUT to object storage. `done` = uploaded so
+  /// far; `total` = precomputed ciphertext byte_count. Under the
+  /// streaming pipeline this can overlap with `encrypting` because
+  /// each part is uploaded as its chunks emerge.
   uploading,
 }
 

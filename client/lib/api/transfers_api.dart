@@ -22,19 +22,16 @@ class TransfersApi {
   /// same [InitiateTransferResponse] — exactly one of `uploadUrl` /
   /// `multipart` is populated.
   ///
-  /// App-mode required: `recipientId`, `wrappedKeyB64`.
-  /// Link-mode required: neither. Optional: `linkPassword` (adds an
-  /// out-of-band gate at download time), `recipientEmail` (stored
-  /// server-side as a blind index for a future "links sent to me"
-  /// inbox — see server ADR-0014).
+  /// ADR-0014 / server ADR-0037: per-transfer crypto metadata
+  /// (`blob_sha256`, `enc_header`, `signature`, and app-mode
+  /// `wrapped_key`) has moved from here to `/commit`. The streaming
+  /// send pipeline doesn't know those values until after ciphertext
+  /// drains, so /initiate only reserves the slot + hands back
+  /// presigned URLs sized against the client-declared byte_count.
   Future<InitiateTransferResponse> initiate({
     required String mode,
     required int byteCount,
-    required String blobSha256Hex,
-    required String encHeaderB64,
-    required String signatureB64,
     String? recipientId,
-    String? wrappedKeyB64,
     String? linkPassword,
     String? recipientEmail,
     int cryptoSuite = 1,
@@ -42,20 +39,16 @@ class TransfersApi {
   }) async {
     assert(mode == 'app' || mode == 'link', 'unknown mode: $mode');
     assert(
-      mode != 'app' || (recipientId != null && wrappedKeyB64 != null),
-      'app mode requires recipientId + wrappedKeyB64',
+      mode != 'app' || recipientId != null,
+      'app mode requires recipientId',
     );
     final payload = <String, dynamic>{
       'mode': mode,
       'byte_count': byteCount,
-      'blob_sha256': blobSha256Hex,
       'crypto_suite': cryptoSuite,
-      'enc_header': encHeaderB64,
-      'signature': signatureB64,
       'max_downloads': maxDownloads,
     };
     if (recipientId != null) payload['recipient_id'] = recipientId;
-    if (wrappedKeyB64 != null) payload['wrapped_key'] = wrappedKeyB64;
     if (linkPassword != null) payload['link_password'] = linkPassword;
     if (recipientEmail != null) payload['recipient_email'] = recipientEmail;
 
@@ -79,25 +72,37 @@ class TransfersApi {
     );
   }
 
-  /// POST `/v1/transfers/{id}/commit`. Body is required for multipart
-  /// (per-part ETags) and omitted for single-shot. The server calls
-  /// `CompleteMultipartUpload` under the hood on the multipart branch
-  /// before HEADing for the real byte_count.
+  /// POST `/v1/transfers/{id}/commit` (ADR-0014 / server ADR-0037).
+  ///
+  /// Carries the per-transfer crypto metadata that was previously
+  /// required at `/initiate`. All three of `blobSha256Hex`,
+  /// `encHeaderB64`, and `signatureB64` are required; `wrappedKeyB64`
+  /// is app-mode only (link-mode commits MUST omit it — server
+  /// rejects with 400 otherwise). `parts` is required for multipart
+  /// commits, omitted for single-shot.
   Future<CommitTransferResponse> commit(
     String transferId, {
+    required String blobSha256Hex,
+    required String encHeaderB64,
+    required String signatureB64,
+    String? wrappedKeyB64,
     List<CommitPart>? parts,
   }) async {
+    final payload = <String, dynamic>{
+      'blob_sha256': blobSha256Hex,
+      'enc_header': encHeaderB64,
+      'signature': signatureB64,
+    };
+    if (wrappedKeyB64 != null) payload['wrapped_key'] = wrappedKeyB64;
+    if (parts != null) {
+      payload['parts'] = [
+        for (final p in parts) {'part_number': p.partNumber, 'etag': p.etag},
+      ];
+    }
     final body = await _client.post(
       '/v1/transfers/$transferId/commit',
       authed: true,
-      body: parts == null
-          ? null
-          : {
-              'parts': [
-                for (final p in parts)
-                  {'part_number': p.partNumber, 'etag': p.etag},
-              ],
-            },
+      body: payload,
     );
     return CommitTransferResponse(
       status: body['status'] as String,
