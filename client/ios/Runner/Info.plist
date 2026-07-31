@@ -66,5 +66,60 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<!--
+		Received files land in the app's Documents directory on iOS —
+		`_saveToExternalStorage` in receive_screen.dart /
+		link_receive_screen.dart routes there because SAF (ADR-0008) is
+		Android-only. Documents is invisible to the user unless BOTH keys
+		below are set: the app then shows up in Files as
+		"On My iPhone > OpaqueShare" and the decrypted file is reachable.
+		Without them the receive completes and the file is unrecoverable.
+	-->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<!--
+		url_launcher's iOS implementation gates on `UIApplication
+		.canOpenURL`, which since iOS 9 returns false for any custom
+		scheme not declared here. The MFA enrolment screen launches
+		`otpauth://` so the user's authenticator picks up the secret on
+		a single device (see core/external_launcher.dart); undeclared,
+		that button silently reports "no authenticator app installed"
+		even when one is.
+
+		Android's equivalent is the <queries> block in
+		AndroidManifest.xml.
+	-->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>otpauth</string>
+	</array>
+	<!--
+		`file_picker` links DKImagePickerController on iOS regardless of
+		the FileType we request. We only ever call `pickFiles(withData:
+		false, allowMultiple: true)` — FileType.any, which routes to
+		UIDocumentPickerViewController and never touches PHPhotoLibrary.
+		The string exists to satisfy App Store static analysis
+		(ITMS-90683 "Missing Purpose String in Info.plist" rejects the
+		binary for the linked-but-unused photo APIs), and to be honest if
+		a user does reach a photo through the document picker.
+	-->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>OpaqueShare needs access only when you pick a photo or video to send. The file is encrypted on this device before it is uploaded — the server never sees its contents.</string>
+	<!--
+		Export compliance. OpaqueShare's primary function is encryption
+		(X25519 / Ed25519 / XChaCha20-Poly1305 via libsodium), so it does
+		NOT qualify for the Category 5 Part 2 exemptions Apple asks about
+		— answering "false" here would be a false declaration.
+
+		OPERATOR TODO before the first App Store submission: file a
+		year-end self-classification report with BIS (ECCN 5D992.c,
+		mass-market) and keep the CCATS / self-classification reference
+		on file. App Store Connect asks for it once per app, not per
+		build. See docs/dev/ios-platform-setup.md.
+	-->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<true/>
 </dict>
 </plist>

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+		Universal Links — the iOS counterpart to the autoVerify App Links
+		intent-filter in android/app/src/main/AndroidManifest.xml. Claims
+		the same three path prefixes under https://opaqueshare.com/ so an
+		email or share link opens the app when installed and falls back to
+		the branded web page otherwise:
+
+		  /r/*            — in-app link-mode receive (client ADR-0010;
+		                    fallback: server-rendered decrypt page,
+		                    server ADR-0035)
+		  /password-reset — in-app "choose new password" form
+		  /verify-email   — in-app auto-verify screen
+
+		iOS has no per-prefix syntax here: the entitlement claims the
+		HOST, and the path filtering happens in the
+		apple-app-site-association (AASA) file the host serves. See
+		infra/www/.well-known/apple-app-site-association in the server
+		repo for the path list.
+
+		OPERATOR TODO (both must be done or universal links silently fall
+		back to opening Safari):
+		  1. Enable the Associated Domains capability for
+		     com.opaqueshare.app in the Apple Developer portal, then
+		     regenerate the provisioning profile.
+		  2. Replace TEAMID in the AASA file with the real Apple
+		     Developer Team ID and deploy it. iOS fetches the AASA over
+		     HTTPS at install time — it must return
+		     `Content-Type: application/json` with no redirect.
+
+		`applinks:` is intentionally the only entry. Do not add
+		`webcredentials:` unless password autofill is actually wired up;
+		an unbacked claim just adds a failing fetch at install time.
+	-->
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:opaqueshare.com</string>
+	</array>
+</dict>
+</plist>
