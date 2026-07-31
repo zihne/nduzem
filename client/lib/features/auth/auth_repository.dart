@@ -105,16 +105,32 @@ class AuthRepository implements TokenSource {
     }
   }
 
-  /// Match the specific `BadPaddingException / BAD_DECRYPT` shape that
-  /// `flutter_secure_storage` surfaces on Android when the
-  /// EncryptedSharedPreferences master key can't decrypt the on-disk
-  /// blob. Deliberately narrow — anything else propagates so we don't
-  /// accidentally wipe a healthy session on an unrelated platform
-  /// error (e.g., a keystore-locked-during-first-unlock hiccup).
+  /// Match the shapes `flutter_secure_storage` surfaces on Android when
+  /// the EncryptedSharedPreferences master key can't decrypt the on-disk
+  /// blob.
+  ///
+  /// There are two distinct ones, and matching only the first left the
+  /// app permanently wedged:
+  ///
+  ///   1. `javax.crypto.BadPaddingException: … BAD_DECRYPT` — raised
+  ///      when the *value* ciphertext fails to decrypt.
+  ///   2. `java.lang.SecurityException: Could not decrypt key.
+  ///      decryption failed` — raised by Tink when the *keyset* itself
+  ///      can't be unwrapped, i.e. the master key is gone or replaced.
+  ///      This is what an Auto Backup restore produces: the encrypted
+  ///      prefs file comes back from the cloud, the hardware-bound
+  ///      master key does not.
+  ///
+  /// Still deliberately narrow. This predicate authorises destroying the
+  /// user's private keys, so it matches decrypt-failure wording only —
+  /// never a bare `SecurityException`, which would let an unrelated
+  /// keystore hiccup (device locked during first unlock, for instance)
+  /// wipe a healthy session.
   static bool _isSecureStorageDecryptCorruption(PlatformException exc) {
     final haystack = '${exc.code} ${exc.message ?? ''} ${exc.details ?? ''}';
     return haystack.contains('BAD_DECRYPT') ||
-        haystack.contains('BadPaddingException');
+        haystack.contains('BadPaddingException') ||
+        haystack.contains('Could not decrypt key');
   }
 
   /// Pull the caller's `/v1/users/me` and reconcile the local session.
