@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../api/api_client.dart';
 import '../../api/users_api.dart';
+import '../../core/recipient_query.dart';
 import '../../crypto/fingerprint.dart';
 import '../auth/auth_providers.dart';
 import 'verified_contacts_repo.dart';
@@ -50,8 +51,8 @@ class _VerifyContactScreenState extends ConsumerState<VerifyContactScreen> {
   }
 
   Future<void> _lookupContact() async {
-    final input = _lookup.text.trim();
-    if (input.isEmpty) {
+    final query = RecipientQuery.parse(_lookup.text);
+    if (query == null) {
       setState(() => _error = 'Enter an email address or handle.');
       return;
     }
@@ -65,10 +66,9 @@ class _VerifyContactScreenState extends ConsumerState<VerifyContactScreen> {
     });
     try {
       final usersApi = await ref.read(usersApiProvider.future);
-      final byEmail = input.contains('@');
-      final result = byEmail
-          ? await usersApi.lookup(email: input)
-          : await usersApi.lookup(handle: input);
+      final result = query.isEmail
+          ? await usersApi.lookup(email: query.value)
+          : await usersApi.lookup(handle: query.value);
 
       // Recompute the fingerprint locally and cross-check against the
       // server's echo. Silent mismatch = trust destroyed.
@@ -95,6 +95,16 @@ class _VerifyContactScreenState extends ConsumerState<VerifyContactScreen> {
     } on ApiException catch (exc) {
       // 404 (unknown user), 401 (unauth) — surface the server message.
       setState(() => _error = exc.message);
+    } on Object catch (exc) {
+      // Local failure, not the API — typically secure_storage throwing
+      // out of VerifiedContactsRepo.read(). Without this the exception
+      // escaped the try and the screen just stopped, showing neither a
+      // contact nor a reason. See the matching catch in send_screen.
+      setState(
+        () => _error = "Couldn't read your saved verifications, so this "
+            "contact can't be checked against a previous one. Restart "
+            'the app and try again. ($exc)',
+      );
     } finally {
       if (mounted) setState(() => _busy = false);
     }
