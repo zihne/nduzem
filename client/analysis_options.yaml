@@ -10,6 +10,14 @@ analyzer:
     # the classes of bug that leak silently into async code.
     missing_return: error
     unawaited_futures: error
+  exclude:
+    - build/**
+    - android/**
+    - ios/**
+    - web/**
+    - windows/**
+    - macos/**
+    - linux/**
 
 linter:
   rules:

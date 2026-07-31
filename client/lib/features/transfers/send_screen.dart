@@ -12,6 +12,7 @@ import 'package:mime/mime.dart' show lookupMimeType;
 
 import '../../api/api_client.dart';
 import '../../api/users_api.dart';
+import '../../core/recipient_query.dart';
 import '../../crypto/fingerprint.dart';
 import '../../crypto/plaintext_source.dart';
 import '../auth/auth_providers.dart';
@@ -181,8 +182,8 @@ class _SendScreenState extends ConsumerState<SendScreen> {
   }
 
   Future<void> _lookupRecipient() async {
-    final input = _lookup.text.trim();
-    if (input.isEmpty) {
+    final query = RecipientQuery.parse(_lookup.text);
+    if (query == null) {
       setState(() => _error = 'Enter the recipient email or @handle.');
       return;
     }
@@ -196,9 +197,9 @@ class _SendScreenState extends ConsumerState<SendScreen> {
     });
     try {
       final svc = await ref.read(transferServiceProvider.future);
-      final res = input.contains('@')
-          ? await svc.lookupRecipient(email: input)
-          : await svc.lookupRecipient(handle: input);
+      final res = query.isEmail
+          ? await svc.lookupRecipient(email: query.value)
+          : await svc.lookupRecipient(handle: query.value);
 
       final localFp = fingerprintOf(
         identityPublic: res.identityPublic,
@@ -233,6 +234,29 @@ class _SendScreenState extends ConsumerState<SendScreen> {
       });
     } on ApiException catch (exc) {
       setState(() => _error = exc.message);
+    } on Object catch (exc) {
+      // Anything that isn't the API talking — in practice a
+      // PlatformException out of secure_storage when
+      // VerifiedContactsRepo.read() hits Android's EncryptedSharedPrefs
+      // in a BAD_DECRYPT state (see SecureStore.resetOnCorruption).
+      //
+      // This used to escape the try entirely, because the only catch
+      // here was `on ApiException`. The lookup would succeed, _recipient
+      // would never be assigned, `finally` would clear the spinner, and
+      // the user got no fingerprint AND no error — a silent dead end in
+      // the middle of the send flow.
+      //
+      // Failing CLOSED is deliberate. `prior` is the key-change alert:
+      // if we can't read whether this contact was verified before, we
+      // must not render the fingerprint as though they were new, or a
+      // substituted key would sail past the one check meant to catch it.
+      setState(
+        () => _error =
+            "Couldn't read your saved verification for this contact, so "
+                "the fingerprint isn't being shown — a key change could "
+                'go unnoticed. Restart the app and try again; if it '
+                'persists, re-verify the contact. ($exc)',
+      );
     } finally {
       if (mounted) setState(() => _busy = false);
     }
