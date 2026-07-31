@@ -257,12 +257,58 @@ class ApiClient {
     }
     final message = detail is String
         ? detail
-        : 'HTTP ${response.statusCode}';
+        : _formatValidationDetail(detail) ?? 'HTTP ${response.statusCode}';
     throw ApiException(
       statusCode: response.statusCode,
       message: message,
       body: decoded,
     );
+  }
+
+  /// Render FastAPI's 422 body into something a human can act on.
+  ///
+  /// A validation failure arrives as a LIST, not a string:
+  ///
+  ///     {"detail": [
+  ///       {"type": "missing", "loc": ["body", "byte_count"],
+  ///        "msg": "Field required", "input": {...}}
+  ///     ]}
+  ///
+  /// The old code only read `detail` when it was a String, so every 422
+  /// collapsed to the literal "HTTP 422" — the server said exactly which
+  /// field it rejected and we threw that away, leaving a class of bug
+  /// that could only be diagnosed by reading server logs.
+  ///
+  /// `loc` is trimmed of its leading "body" / "query" segment, which is
+  /// noise to the reader. Whole-model validator failures have `loc` of
+  /// just `["body"]` and carry the message alone.
+  ///
+  /// **`input` is deliberately never included.** On this API it echoes
+  /// the offending request body, which can hold an email address, a link
+  /// password, or an encrypted header — none of which belongs in a
+  /// SnackBar, a screenshot in a bug report, or a crash log.
+  static String? _formatValidationDetail(Object? detail) {
+    if (detail is! List || detail.isEmpty) return null;
+
+    final parts = <String>[];
+    for (final entry in detail) {
+      if (entry is! Map) continue;
+      final msg = entry['msg'];
+      if (msg is! String || msg.isEmpty) continue;
+
+      final loc = entry['loc'];
+      final field = loc is List
+          ? loc
+              .whereType<Object>()
+              .map((e) => e.toString())
+              .where((e) => e != 'body' && e != 'query' && e != 'path')
+              .join('.')
+          : '';
+
+      parts.add(field.isEmpty ? msg : '$field: $msg');
+    }
+    if (parts.isEmpty) return null;
+    return parts.join('; ');
   }
 
   Map<String, dynamic> _tryDecode(String body) {
