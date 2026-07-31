@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Android 12+ (API 31+) backup rules. `android:allowBackup="false"`
+    disables cloud backup on its own, but does NOT govern
+    device-to-device transfer on 12+ — that path is controlled here.
+    Both sections are therefore excluded explicitly.
+
+    Nothing this app stores locally is meaningfully restorable:
+
+      - secure_storage (identity + signing private keys) is sealed by a
+        hardware-bound Keystore master key that never leaves the device.
+        Restoring the ciphertext without the key produces the
+        "Could not decrypt key" wedge described in AndroidManifest.xml.
+      - Transfer history is a local convenience cache, per-user scoped
+        (ADR-0012), reconstructable from the server's transfer list.
+
+    So the exclusions cost the user nothing they could have had, and
+    they remove a whole class of unrecoverable-state bug.
+
+    `domain="sharedpref" path="."` covers the whole shared_prefs
+    directory rather than naming flutter_secure_storage's file
+    specifically — the plugin owns that filename and could change it,
+    and there is nothing else in there worth restoring.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="file" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="file" path="." />
+    </device-transfer>
+</data-extraction-rules>

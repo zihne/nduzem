@@ -103,7 +103,9 @@ class _VerifyContactScreenState extends ConsumerState<VerifyContactScreen> {
       setState(
         () => _error = "Couldn't read your saved verifications, so this "
             "contact can't be checked against a previous one. Restart "
-            'the app and try again. ($exc)',
+            'the app: local secure storage is unreadable, and the next '
+            'launch clears it and signs you out so you can start clean. '
+            '($exc)',
       );
     } finally {
       if (mounted) setState(() => _busy = false);

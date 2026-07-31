@@ -254,8 +254,9 @@ class _SendScreenState extends ConsumerState<SendScreen> {
         () => _error =
             "Couldn't read your saved verification for this contact, so "
                 "the fingerprint isn't being shown — a key change could "
-                'go unnoticed. Restart the app and try again; if it '
-                'persists, re-verify the contact. ($exc)',
+                'go unnoticed. Restart the app: local secure storage is '
+                'unreadable, and the next launch clears it and signs you '
+                'out so you can start clean. ($exc)',
       );
     } finally {
       if (mounted) setState(() => _busy = false);

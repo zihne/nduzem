@@ -344,6 +344,48 @@ void main() {
       verify(() => store.resetOnCorruption()).called(1);
     });
 
+    test('Tink "Could not decrypt key" at startup → self-heal', () async {
+      // The Auto Backup shape, and the one the original predicate
+      // missed: restoring shared_prefs from the cloud without the
+      // hardware-bound master key makes Tink fail to unwrap the KEYSET
+      // rather than a value, so neither BAD_DECRYPT nor
+      // BadPaddingException appears anywhere in the exception. The app
+      // stayed wedged across restarts because of it.
+      //
+      // Verbatim from a device, via readAll() inside
+      // VerifiedContactsRepo.
+      when(() => store.resetOnCorruption()).thenAnswer((_) async {});
+      when(() => store.read(SecureStore.kUserId)).thenThrow(
+        PlatformException(
+          code: 'Exception encountered, readAll',
+          message: 'java.lang.SecurityException: Could not decrypt key. '
+              'decryption failed',
+        ),
+      );
+
+      final session = await repo.restoreSession();
+      expect(session, isNull);
+      verify(() => store.resetOnCorruption()).called(1);
+    });
+
+    test('bare SecurityException does NOT trigger a wipe', () async {
+      // The widening above must stay surgical: this predicate authorises
+      // destroying the user's private keys, so a SecurityException
+      // without decrypt-failure wording has to propagate untouched.
+      when(() => store.read(SecureStore.kUserId)).thenThrow(
+        PlatformException(
+          code: 'Exception encountered, read',
+          message: 'java.lang.SecurityException: user not authenticated',
+        ),
+      );
+
+      await expectLater(
+        repo.restoreSession(),
+        throwsA(isA<PlatformException>()),
+      );
+      verifyNever(() => store.resetOnCorruption());
+    });
+
     test('non-decrypt PlatformException propagates (no silent wipe)',
         () async {
       // Guardrail: we don't want to silently wipe a healthy session

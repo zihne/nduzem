@@ -1,8 +1,40 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!--
+        Backup is OFF, and that is a correctness requirement, not just a
+        privacy preference.
+
+        Identity + signing private keys live in
+        EncryptedSharedPreferences, whose master key is held in the
+        Android Keystore — hardware-bound and deliberately
+        non-exportable, so it is NEVER included in a backup. The
+        encrypted prefs FILE, however, is an ordinary file under
+        shared_prefs/ and Auto Backup will happily ship it to the cloud.
+
+        Restoring that pairing is incoherent: the file comes back, the
+        master key does not, the app mints a fresh one, and every read
+        then fails with
+
+            java.lang.SecurityException: Could not decrypt key.
+            decryption failed
+
+        which wedges the app until the user clears app data by hand.
+        Observed in the field before this attribute was set.
+
+        Turning backup off costs nothing here, because the keys were
+        never restorable in the first place — ADR-0011 makes them
+        device-scoped by design, and a new device is already a
+        "fresh device" that has to re-register or re-log-in. All the
+        backup was ever going to restore is ciphertext nobody can open.
+
+        dataExtractionRules covers Android 12+, where allowBackup alone
+        does not govern device-to-device transfer.
+    -->
     <application
         android:label="OpaqueShare"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules">
         <activity
             android:name=".MainActivity"
             android:exported="true"
