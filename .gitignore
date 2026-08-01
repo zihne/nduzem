@@ -23,6 +23,28 @@ client/android/app/build/
 client/android/captures/
 *.iml
 
+# Signing keys, certificates, and store credentials — NEVER commit.
+#
+# This repository is intended to be made public (see README "Status"), so
+# a key committed here is a key published to the world, and rewriting
+# history after the fact does not un-publish it. Treat these patterns as
+# a backstop: the keys belong in a password manager or CI secret store,
+# not in the working tree at all.
+#
+#   .p8              App Store Connect API key, In-App Purchase key.
+#                    Apple lets you download these exactly ONCE, which is
+#                    precisely why they get parked somewhere convenient.
+#   .p12 / .cer      exported signing certificates, .p12 includes the
+#                    private key
+#   .mobileprovision provisioning profiles (embed team id + device list)
+#
+# Android upload keystores and key.properties are already covered by
+# client/android/.gitignore.
+*.p8
+*.p12
+*.cer
+*.mobileprovision
+
 # Web
 client/web/build/
 
