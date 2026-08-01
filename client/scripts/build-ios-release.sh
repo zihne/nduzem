@@ -65,17 +65,52 @@ fail() {
     exit 1
 }
 
+# --- parse flags -----------------------------------------------------
+# Delivery to Apple is opt-in. Building is safe and repeatable; sending
+# a build to App Store Connect is neither, so it never happens as a side
+# effect of asking for an IPA. Written for bash 3.2 (what macOS ships),
+# hence no associative arrays and the `${arr[@]+...}` guard for the
+# empty-array-under-set-u case.
+DO_UPLOAD=0
+DO_VALIDATE=0
+POSITIONAL=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --upload)   DO_UPLOAD=1; shift ;;
+        --validate) DO_VALIDATE=1; shift ;;
+        -h|--help)
+            sed -n '2,42p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+            exit 0
+            ;;
+        --*) fail "unknown flag: $1  (try --help)" ;;
+        *)   POSITIONAL+=("$1"); shift ;;
+    esac
+done
+set -- ${POSITIONAL[@]+"${POSITIONAL[@]}"}
+
+# --upload implies validation: it's a few seconds and it converts most
+# rejections from "an email twenty minutes later" into "an error now".
+[[ "$DO_UPLOAD" -eq 1 ]] && DO_VALIDATE=1
+
 # --- resolve arguments -----------------------------------------------
 API_BASE="${1:-${OPAQUESHARE_API_BASE:-}}"
 if [[ -z "$API_BASE" ]]; then
     fail "OPAQUESHARE_API_BASE is required.
 
 Usage:
-  scripts/build-ios-release.sh https://api.opaqueshare.com [https://opaqueshare.com]
+  scripts/build-ios-release.sh <API_BASE> [SHARE_URL_BASE] [--validate] [--upload]
 
-Or:
-  export OPAQUESHARE_API_BASE=https://api.opaqueshare.com
-  scripts/build-ios-release.sh"
+Examples:
+  # build only — the default, does not contact Apple
+  scripts/build-ios-release.sh https://api.opaqueshare.com
+
+  # build, then ask App Store Connect whether it would accept it
+  scripts/build-ios-release.sh https://api.opaqueshare.com --validate
+
+  # build, validate, then actually deliver to TestFlight/App Store
+  ASC_KEY_ID=ABCD123456 ASC_ISSUER_ID=69a6de70-… \\
+    scripts/build-ios-release.sh https://api.opaqueshare.com --upload"
 fi
 
 case "$API_BASE" in
@@ -215,6 +250,54 @@ else
 fi
 ok "Info.plist + entitlements look right"
 
+# --- 4b. App Store Connect credentials (only when delivering) --------
+# Checked HERE, before clean/analyze/test/build, so a missing key costs
+# you a second rather than being discovered after a ten-minute build.
+if [[ "$DO_VALIDATE" -eq 1 || "$DO_UPLOAD" -eq 1 ]]; then
+    say "Checking App Store Connect credentials…"
+    command -v xcrun >/dev/null || fail "xcrun not on PATH."
+
+    [[ -n "${ASC_KEY_ID:-}" ]] || fail "ASC_KEY_ID is not set.
+
+That's the 10-character Key ID from App Store Connect →
+Users and Access → Integrations → App Store Connect API."
+
+    [[ -n "${ASC_ISSUER_ID:-}" ]] || fail "ASC_ISSUER_ID is not set.
+
+The Issuer ID is the UUID shown above the key list on the same page."
+
+    # altool takes the KEY ID, not a path: it searches a fixed set of
+    # directories for a file named exactly AuthKey_<KEY_ID>.p8. Renaming
+    # the download breaks the lookup, and altool's own error for that is
+    # opaque — so locate it here and say something useful.
+    KEY_FILE="AuthKey_${ASC_KEY_ID}.p8"
+    KEY_FOUND=""
+    for d in "./private_keys" "$HOME/private_keys" "$HOME/.private_keys" \
+             "$HOME/.appstoreconnect/private_keys" "${API_PRIVATE_KEYS_DIR:-}"; do
+        [[ -n "$d" && -f "$d/$KEY_FILE" ]] && { KEY_FOUND="$d/$KEY_FILE"; break; }
+    done
+    if [[ -z "$KEY_FOUND" ]]; then
+        fail "Couldn't find $KEY_FILE.
+
+altool locates the key by NAME, not by path. Put it in one of:
+  ./private_keys/            (inside the repo — avoid; it's gitignored
+                              as a backstop, but keys don't belong here)
+  ~/private_keys/
+  ~/.private_keys/
+  ~/.appstoreconnect/private_keys/     ← recommended
+…or point API_PRIVATE_KEYS_DIR at the directory holding it.
+
+The filename must be exactly $KEY_FILE — Apple's download is already
+named that; renaming it breaks the lookup."
+    fi
+    case "$KEY_FOUND" in
+        ./private_keys/*)
+            warn "Using $KEY_FOUND — a private key inside the repo.
+It's gitignored, but move it to ~/.appstoreconnect/private_keys/." ;;
+    esac
+    ok "credentials present (key $ASC_KEY_ID)"
+fi
+
 # --- 5. Version + build number ---------------------------------------
 # App Store Connect rejects a build whose (version, build) pair has
 # already been uploaded, and the rejection arrives minutes later by
@@ -326,18 +409,51 @@ printf '  Min iOS:    %s\n' "$SHIPPED_MIN"
 printf '  Encryption: ITSAppUsesNonExemptEncryption=%s\n' "$SHIPPED_ENC"
 printf '%s─────────────────────────────────────────────%s\n\n' "$C_BOLD" "$C_RESET"
 
+# --- 12. Validate / upload (opt-in) ----------------------------------
+if [[ "$DO_VALIDATE" -eq 1 ]]; then
+    say "Validating with App Store Connect (no delivery)…"
+    if xcrun altool --validate-app -f "$IPA" -t ios \
+         --api-key "$ASC_KEY_ID" --api-issuer "$ASC_ISSUER_ID"; then
+        ok "App Store Connect would accept this build"
+    else
+        fail "Validation failed — see the error above. Nothing was delivered.
+
+Common first-time causes:
+  • No app record in App Store Connect for $SHIPPED_ID
+  • Build $SHIPPED_BUILD already used for version $SHIPPED_VER
+  • Missing export-compliance answer on the app record"
+    fi
+fi
+
+if [[ "$DO_UPLOAD" -eq 1 ]]; then
+    say "Uploading to App Store Connect…"
+    if xcrun altool --upload-app -f "$IPA" -t ios \
+         --api-key "$ASC_KEY_ID" --api-issuer "$ASC_ISSUER_ID"; then
+        ok "uploaded — processing takes a few minutes before it appears in TestFlight"
+    else
+        fail "Upload failed — see the error above."
+    fi
+else
+    printf '\n'
+    say "Not uploaded (pass --upload to deliver, --validate to dry-run)."
+fi
+
 cat <<EOF
-Next steps:
+
+Notes:
 
   1. The app record must already exist in App Store Connect
      (My Apps → + → New App, bundle id $SHIPPED_ID). Uploading
      without it succeeds and then the build never appears.
 
-  2. Upload:
+  2. Manual upload, if you'd rather not use --upload:
        xcrun altool --upload-app -f "$IPA" -t ios \\
-         --apiKey <KEY_ID> --apiIssuer <ISSUER_ID>
+         --api-key <KEY_ID> --api-issuer <ISSUER_ID>
 
-     …or drag the IPA into Transporter.app.
+     --api-key takes the 10-character Key ID, NOT a file path. The
+     key itself is found by name — AuthKey_<KEY_ID>.p8 — in
+     ~/.appstoreconnect/private_keys/ (or one of altool's other
+     search dirs). Or drag the IPA into Transporter.app.
 
   3. Export compliance: this build declares it uses non-exempt
      encryption. Before the first submission, file a year-end
