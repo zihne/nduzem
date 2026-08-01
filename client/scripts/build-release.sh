@@ -91,8 +91,14 @@ esac
 SHARE_URL_BASE="${2:-${OPAQUESHARE_SHARE_URL_BASE:-}}"
 if [[ -z "$SHARE_URL_BASE" ]]; then
     # Derive by stripping a leading `api.` from the URL's host.
-    # Uses bash param expansion; matches the client's Uri manipulation.
-    SHARE_URL_BASE="${API_BASE/\/\/api./\/\/}"
+    #
+    # Was `${API_BASE/\/\/api./\/\/}`, which is broken: bash keeps the
+    # backslashes in the replacement half of a pattern substitution, so
+    # it produced `https:\/\/opaqueshare.com` and then tripped the
+    # validation below with a message that blamed the input. It failed
+    # safe rather than baking a malformed URL into a release, but the
+    # "omit the second argument" path never actually worked.
+    SHARE_URL_BASE="$(printf '%s' "$API_BASE" | sed 's|//api\.|//|')"
     if [[ "$SHARE_URL_BASE" == "$API_BASE" ]]; then
         warn "Could not derive a share URL base from API base — no 'api.' prefix.
 Falling back to the API base as the share host. Set
