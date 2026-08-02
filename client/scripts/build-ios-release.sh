@@ -250,6 +250,36 @@ else
 fi
 ok "Info.plist + entitlements look right"
 
+# --- 4a. Launch image is real, not Flutter's placeholder -------------
+# `flutter create` ships LaunchImage*.png as 1x1 transparent pixels, so
+# the app launches to a blank white screen. Flutter's own build output
+# mentions it, but only as a [!] line in a wall of text that scrolls
+# past — easy to ship without noticing.
+say "Checking the launch image isn't the stock placeholder…"
+LAUNCH_DIR="$CLIENT_ROOT/ios/Runner/Assets.xcassets/LaunchImage.imageset"
+LAUNCH_1X="$LAUNCH_DIR/LaunchImage.png"
+if [[ ! -f "$LAUNCH_1X" ]]; then
+    warn "No LaunchImage.png in the asset catalog."
+else
+    LW=$(sips -g pixelWidth "$LAUNCH_1X" 2>/dev/null | awk '/pixelWidth/{print $2}')
+    LH=$(sips -g pixelHeight "$LAUNCH_1X" 2>/dev/null | awk '/pixelHeight/{print $2}')
+    if [[ -z "${LW:-}" || -z "${LH:-}" ]]; then
+        warn "Couldn't read LaunchImage.png dimensions — skipping the check."
+    elif [[ "$LW" -le 2 && "$LH" -le 2 ]]; then
+        fail "LaunchImage.png is ${LW}x${LH} — Flutter's placeholder.
+
+The app will launch to a blank screen. Regenerate from the brand mark:
+
+  SRC=assets/branding/app_icon_foreground.png
+  DST=ios/Runner/Assets.xcassets/LaunchImage.imageset
+  sips -Z 200 \"\$SRC\" --out \"\$DST/LaunchImage.png\"
+  sips -Z 400 \"\$SRC\" --out \"\$DST/LaunchImage@2x.png\"
+  sips -Z 600 \"\$SRC\" --out \"\$DST/LaunchImage@3x.png\""
+    else
+        ok "launch image is ${LW}x${LH}"
+    fi
+fi
+
 # --- 4b. App Store Connect credentials (only when delivering) --------
 # Checked HERE, before clean/analyze/test/build, so a missing key costs
 # you a second rather than being discovered after a ten-minute build.
@@ -379,21 +409,38 @@ SHIPPED_MIN=$(plist_get MinimumOSVersion)
     || fail "ITSAppUsesNonExemptEncryption did not make it into the built app."
 
 if command -v codesign >/dev/null; then
-    ENTS=$(codesign -d --entitlements :- "$APP" 2>/dev/null || true)
-    if echo "$ENTS" | grep -q 'associated-domains'; then
-        ok "signed binary carries the associated-domains entitlement"
+    # PARSE the entitlements, don't grep them. `codesign -d --entitlements :-`
+    # emits the whole plist on a SINGLE line, so `grep -A1 get-task-allow`
+    # returns that same line and any `<true/>` anywhere in it matches —
+    # `beta-reports-active` sits right there and is true on every
+    # TestFlight-eligible build. The earlier grep version therefore
+    # failed every correct distribution build it was meant to bless.
+    ENTS_PLIST="$WORK/entitlements.plist"
+    codesign -d --entitlements :- "$APP" 2>/dev/null > "$ENTS_PLIST" || true
+
+    ent_get() { /usr/libexec/PlistBuddy -c "Print :$1" "$ENTS_PLIST" 2>/dev/null; }
+
+    if [[ ! -s "$ENTS_PLIST" ]] || ! /usr/libexec/PlistBuddy -c "Print" "$ENTS_PLIST" >/dev/null 2>&1; then
+        warn "Couldn't read entitlements from the signed binary — skipping
+the associated-domains and get-task-allow checks."
     else
-        warn "The signed binary does NOT carry associated-domains.
+        if ent_get 'com.apple.developer.associated-domains' >/dev/null; then
+            ok "signed binary carries the associated-domains entitlement"
+        else
+            warn "The signed binary does NOT carry associated-domains.
 
 Universal links will silently fall back to Safari. Usual cause: the
 App ID in the developer portal doesn't have the Associated Domains
 capability enabled, so the profile Xcode generated omits it."
-    fi
-    if echo "$ENTS" | grep -q '<key>get-task-allow</key>' && \
-       echo "$ENTS" | grep -A1 'get-task-allow' | grep -q '<true/>'; then
-        fail "get-task-allow is TRUE — this is a debug-signed build.
+        fi
+
+        GTA=$(ent_get 'get-task-allow' || true)
+        if [[ "$GTA" == "true" ]]; then
+            fail "get-task-allow is TRUE — this is a debug-signed build.
 App Store Connect will reject it. Something exported with a
 development profile instead of distribution."
+        fi
+        ok "get-task-allow=${GTA:-absent} (distribution-signed)"
     fi
 fi
 
