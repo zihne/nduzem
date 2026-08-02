@@ -205,6 +205,7 @@
 				9705A1C41CF9048500538489 /* Embed Frameworks */,
 				3B06AD1E1E4923F5004D2608 /* Thin Binary */,
 				9607F7A7DC5C5027859C79BC /* [CP] Embed Pods Frameworks */,
+				7A11B0C12E01A1F000AA5501 /* Strip arm64e from libsodium */,
 			);
 			buildRules = (
 			);
@@ -282,6 +283,21 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		7A11B0C12E01A1F000AA5501 /* Strip arm64e from libsodium */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Strip arm64e from libsodium";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [ -z \"${TARGET_BUILD_DIR}\" ] || [ -z \"${FRAMEWORKS_FOLDER_PATH}\" ]; then exit 0; fi\nBIN=\"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/libsodium.framework/libsodium\"\n[ -f \"$BIN\" ] || exit 0\nlipo -info \"$BIN\" | grep -q arm64e || exit 0\necho \"note: stripping arm64e from libsodium.framework\"\nlipo -remove arm64e \"$BIN\" -output \"$BIN\" || exit 1\nif [ -n \"${EXPANDED_CODE_SIGN_IDENTITY:-}\" ] && [ \"${CODE_SIGNING_REQUIRED:-YES}\" != \"NO\" ]; then\n  codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --preserve-metadata=identifier,entitlements,flags \"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/libsodium.framework\" || exit 1\nfi\n";
+		};
 		3B06AD1E1E4923F5004D2608 /* Thin Binary */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
