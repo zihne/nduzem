@@ -34,10 +34,18 @@ The backend (FastAPI conduit + infrastructure) is **not** open source.
 - The client crypto stack is classical (X25519 + Ed25519 + XChaCha20-Poly1305).
   A hybrid post-quantum suite is planned for v2; v1 is migration-ready via
   `crypto_suite` versioning.
-- The phrase **"zero-knowledge"** is not used in marketing until an
-  independent third-party audit of the cryptographic design and client
-  implementation has been published. The accurate phrasing for now is *"the
-  server never holds keys or plaintext."*
+- We do describe OpaqueShare as **zero-knowledge**, and we mean something
+  specific and narrow by it: the server never holds your keys or your
+  plaintext, and cannot derive either. That is a claim about the
+  architecture, and it is checkable — against the client source in this
+  repository, and against the protocol in the security whitepaper. You do
+  not have to take it on trust, which is the point.
+  It is **not** a claim that anyone independent has verified it. No external
+  audit of the cryptographic design or the client implementation has been
+  published. When one is, it will be linked here and in
+  [provability/audit/](provability/audit/). Until then, "zero-knowledge"
+  here describes what the design makes impossible, not what an auditor has
+  confirmed.
 
 ## Verifying a release
 
