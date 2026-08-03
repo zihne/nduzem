@@ -166,4 +166,51 @@ void main() {
       ),
     ).called(2);
   });
+
+  // --- restore purchases (workstream B) ------------------------------
+
+  test('restorePurchases is a no-op when no store is available', () async {
+    // Under `flutter test` on macOS/Linux, Platform.isAndroid and
+    // Platform.isIOS are both false, so `storeAvailable` is false and
+    // there is nothing to restore. The important property is that it
+    // returns cleanly rather than reaching into the plugin, whose
+    // native channel does not exist here — the paywall calls this from
+    // a user-visible button and must not throw on desktop or web.
+    final plugin = _FakeInAppPurchase();
+    final svc = IapPurchaseService(
+      billingApi: api,
+      region: 'US',
+      inAppPurchase: plugin,
+    );
+
+    await expectLater(svc.restorePurchases(), completes);
+    verifyNever(() => plugin.restorePurchases());
+  });
+
+  test('stub receipts are labelled with the running platform', () async {
+    // Guards the fix to the previously hardcoded `platform: 'google'`.
+    // On a non-iOS host this must be 'google'; the same expression now
+    // serves the real-purchase path, where sending an Apple JWS as a
+    // Google receipt would fail verification server-side.
+    when(
+      () => api.iapVerify(
+        platform: any(named: 'platform'),
+        productSku: any(named: 'productSku'),
+        region: any(named: 'region'),
+        receipt: any(named: 'receipt'),
+      ),
+    ).thenAnswer((_) async => grant('sub_personal'));
+
+    await service.buy(sku: 'sub_personal', productType: 'subscription');
+
+    final platforms = verify(
+      () => api.iapVerify(
+        platform: captureAny(named: 'platform'),
+        productSku: any(named: 'productSku'),
+        region: any(named: 'region'),
+        receipt: any(named: 'receipt'),
+      ),
+    ).captured;
+    expect(platforms.single, 'google');
+  });
 }

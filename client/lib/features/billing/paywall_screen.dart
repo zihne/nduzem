@@ -39,11 +39,12 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
   // SKUs Play recognises on this device. Empty when we're on the STUB
   // fallback path (iOS / no-Play). Populated on Android from
   // `IapPurchaseService.queryProducts` after we know the catalog.
-  Set<String> _playAvailableSkus = const {};
+  Set<String> _storeAvailableSkus = const {};
   bool _usingStubFlow = true;
   bool _loading = true;
   String? _error;
   String? _purchasingSku;
+  bool _restoring = false;
 
   static const String _defaultRegion = 'US';
 
@@ -73,9 +74,9 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
         platform: _platform,
       );
 
-      final playAvailable = await service.playAvailable;
+      final storeAvailable = await service.storeAvailable;
       Set<String> playSkus = const {};
-      if (playAvailable) {
+      if (storeAvailable) {
         final catalogSkus = catalog.products.map((p) => p.sku).toSet();
         final products = await service.queryProducts(catalogSkus);
         playSkus = products.keys.toSet();
@@ -85,8 +86,8 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
       setState(() {
         _balance = balance;
         _catalog = catalog;
-        _playAvailableSkus = playSkus;
-        _usingStubFlow = !playAvailable;
+        _storeAvailableSkus = playSkus;
+        _usingStubFlow = !storeAvailable;
       });
     } on ApiException catch (exc) {
       if (mounted) setState(() => _error = exc.message);
@@ -94,6 +95,45 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
       if (mounted) setState(() => _error = 'Load failed: $exc');
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  /// Ask the store to re-emit everything this Apple ID / Google account
+  /// already owns. Redelivered purchases land on the normal purchase
+  /// stream and are re-verified server-side, so a restored subscription
+  /// reinstates the balance through the same path as a fresh buy.
+  ///
+  /// Exposed because App Store Review expects it (Guideline 3.1.1), and
+  /// because it is the only route back for a user who reinstalls on a
+  /// new device while still paying for a subscription.
+  Future<void> _restorePurchases() async {
+    setState(() {
+      _restoring = true;
+      _error = null;
+    });
+    try {
+      final service = await ref.read(iapPurchaseServiceProvider.future);
+      await service.restorePurchases();
+      if (!mounted) return;
+      // Grants arrive asynchronously on the purchase stream, so the
+      // balance may not have moved by the time this returns. Re-read it
+      // rather than asserting anything about what was restored.
+      await _refresh();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Restore requested. Any active purchases will reappear in '
+            'your balance shortly.',
+          ),
+        ),
+      );
+    } on ApiException catch (exc) {
+      if (mounted) setState(() => _error = exc.message);
+    } on Object catch (exc) {
+      if (mounted) setState(() => _error = 'Restore failed: $exc');
+    } finally {
+      if (mounted) setState(() => _restoring = false);
     }
   }
 
@@ -172,10 +212,35 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
             else ...[
               _CatalogSection(
                 catalog: _catalog,
-                playAvailableSkus: _playAvailableSkus,
+                storeAvailableSkus: _storeAvailableSkus,
                 onBuy: _buy,
                 purchasingSku: _purchasingSku,
               ),
+              // App Store Review Guideline 3.1.1 expects a user-visible
+              // way to restore previously-purchased subscriptions and
+              // non-consumables. Its absence is a routine rejection.
+              // The service already calls restorePurchases() during
+              // initialize(); this exposes it deliberately, because a
+              // user reinstalling on a new device has no other route
+              // back to a subscription they are still paying for.
+              if (!_usingStubFlow) ...[
+                const SizedBox(height: 8),
+                Center(
+                  child: TextButton.icon(
+                    onPressed: _restoring ? null : _restorePurchases,
+                    icon: _restoring
+                        ? const SizedBox(
+                            height: 16,
+                            width: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.restore),
+                    label: Text(
+                      _restoring ? 'Restoring…' : 'Restore purchases',
+                    ),
+                  ),
+                ),
+              ],
               const SizedBox(height: 24),
               _ModeNoticeCard(usingStubFlow: _usingStubFlow),
             ],
@@ -234,7 +299,7 @@ class _BalanceCard extends StatelessWidget {
 class _CatalogSection extends StatelessWidget {
   const _CatalogSection({
     required this.catalog,
-    required this.playAvailableSkus,
+    required this.storeAvailableSkus,
     required this.onBuy,
     required this.purchasingSku,
   });
@@ -243,7 +308,7 @@ class _CatalogSection extends StatelessWidget {
   /// SKUs Play knows about. Empty when we're on the stub fallback
   /// (iOS / no-Play) — tiles render as normal, since the STUB path
   /// works for all of them.
-  final Set<String> playAvailableSkus;
+  final Set<String> storeAvailableSkus;
   final void Function(CatalogProduct) onBuy;
   final String? purchasingSku;
 
@@ -270,12 +335,12 @@ class _CatalogSection extends StatelessWidget {
         .toList(growable: false);
 
     Widget tile(CatalogProduct p) {
-      // On Android with Play, a SKU missing from `playAvailableSkus`
+      // On Android with Play, a SKU missing from `storeAvailableSkus`
       // means catalog / Play Console drift — grey out the Buy button
       // so the user gets a clear "not available on this device"
       // signal. On iOS / no-Play we take the STUB path uniformly.
-      final onPlayFlow = playAvailableSkus.isNotEmpty;
-      final unavailable = onPlayFlow && !playAvailableSkus.contains(p.sku);
+      final onStoreFlow = storeAvailableSkus.isNotEmpty;
+      final unavailable = onStoreFlow && !storeAvailableSkus.contains(p.sku);
       return _ProductTile(
         product: p,
         busy: purchasingSku == p.sku,
