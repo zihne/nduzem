@@ -8,7 +8,7 @@ import 'package:in_app_purchase_android/in_app_purchase_android.dart';
 
 import '../../api/billing_api.dart';
 
-/// Play Billing state machine that survives paywall-screen disposal.
+/// Store-billing state machine that survives paywall-screen disposal.
 ///
 /// Owned by a Riverpod provider so a purchase started on the paywall
 /// completes even if the user backs out mid-dialog. See ADR-0002 for
@@ -16,14 +16,18 @@ import '../../api/billing_api.dart';
 ///
 /// Behaviour matrix:
 ///
-///   - **Android + Play available**  → real `in_app_purchase` flow.
-///     `buyConsumable(autoConsume: false)` for credit packs;
-///     `buyNonConsumable` for subscriptions. Server verifies before
-///     we `completePurchase` — Play redelivers on next app open if
-///     the server verification failed for any reason.
-///   - **iOS / no-Play Android / desktop** → STUB path. Mints
-///     `STUB:<sku>:<txn>` and POSTs to /iap/verify. Server accepts
-///     stubs indefinitely per server ADR-0033.
+///   - **Android + Play, or iOS + StoreKit** → real `in_app_purchase`
+///     flow. `buyConsumable(autoConsume: false)` for credit packs;
+///     `buyNonConsumable` for subscriptions. Server verifies before we
+///     `completePurchase` — the store redelivers on next app open if
+///     server verification failed for any reason.
+///   - **Web / desktop / a device without its store** → STUB path.
+///     Mints `STUB:<sku>:<txn>` and POSTs to /iap/verify. Server
+///     accepts stubs indefinitely per server ADR-0033.
+///
+/// iOS reached the STUB path unconditionally until the Apple verifier
+/// landed; see `docs/dev/ios-in-app-purchase-scope.md` in the server
+/// repo for what changed and what is still outstanding.
 ///
 /// The service exposes a single async `buy(sku, productType)` that
 /// returns when the purchase is fully processed (server verified +
@@ -53,16 +57,28 @@ class IapPurchaseService {
   // plugin without hitting Play twice per purchase.
   final Map<String, ProductDetails> _productDetailsCache = {};
 
-  /// True iff we should try the real Play Billing flow. Any other
-  /// combination (iOS, web, desktop, Android without Play Store)
-  /// falls back to the STUB receipt path — server accepts both.
-  Future<bool> get playAvailable async {
+  /// True iff a real store billing flow is available — Play Billing on
+  /// Android, StoreKit on iOS. Anything else (web, desktop, a device
+  /// without the store) falls back to the STUB receipt path, which the
+  /// server accepts.
+  ///
+  /// Renamed from `playAvailable` when iOS was added — the old name
+  /// described the only platform that used to reach this code, and a
+  /// getter saying "play" while returning true on iOS is the kind of
+  /// thing that misleads a later reader.
+  Future<bool> get storeAvailable async {
     // `dart:io`'s `Platform` throws `UnsupportedError` on Flutter web
     // when any getter is accessed. Short-circuit before touching it.
     if (kIsWeb) return false;
-    if (!Platform.isAndroid) return false;
+    if (!Platform.isAndroid && !Platform.isIOS) return false;
     return _iap.isAvailable();
   }
+
+  /// Which store this purchase is going through, for `/iap/verify`.
+  /// The server picks its receipt adapter from this, so getting it
+  /// wrong routes an Apple JWS at the Google verifier.
+  static String get _platform =>
+      (!kIsWeb && Platform.isIOS) ? 'apple' : 'google';
 
   /// Subscribe to the purchase stream. Safe to call more than once.
   ///
@@ -80,7 +96,7 @@ class IapPurchaseService {
   Future<void> initialize() async {
     if (_initialized) return;
     _initialized = true;
-    if (!await playAvailable) return;
+    if (!await storeAvailable) return;
     _sub = _iap.purchaseStream.listen(
       _onPurchaseUpdate,
       onDone: () => _sub?.cancel(),
@@ -103,6 +119,28 @@ class IapPurchaseService {
     }
   }
 
+  /// Ask the store to re-emit every purchase this account still owns.
+  ///
+  /// [initialize] already does this once at startup to unstick
+  /// purchases that were paid for but never acknowledged. This is the
+  /// user-initiated version, for the paywall's "Restore purchases"
+  /// control — a user reinstalling on a new device has no other way
+  /// back to a subscription they are still paying for, and App Store
+  /// Review Guideline 3.1.1 expects the affordance to exist.
+  ///
+  /// Redelivered purchases arrive on the normal stream and go through
+  /// [_processGranted], so they are re-verified server-side before
+  /// anything is granted. `/iap/verify` is idempotent (server
+  /// ADR-0033), so restoring repeatedly is harmless.
+  ///
+  /// No-op where there is no store (web, desktop): there is nothing to
+  /// restore, and STUB purchases were granted server-side already.
+  Future<void> restorePurchases() async {
+    if (!await storeAvailable) return;
+    await initialize();
+    await _iap.restorePurchases();
+  }
+
   /// Ask Play for product details for the given SKUs. Returns the
   /// subset Play recognises; SKUs missing from the return value are
   /// unavailable on this device (catalog / Play Console drift). No-op
@@ -110,7 +148,7 @@ class IapPurchaseService {
   Future<Map<String, ProductDetails>> queryProducts(
     Iterable<String> skus,
   ) async {
-    if (!await playAvailable) return const {};
+    if (!await storeAvailable) return const {};
     final skuSet = skus.toSet();
     final resp = await _iap.queryProductDetails(skuSet);
     for (final p in resp.productDetails) {
@@ -142,7 +180,7 @@ class IapPurchaseService {
         StateError('Purchase superseded by a fresh buy() call.'),
       );
     }
-    if (!await playAvailable) {
+    if (!await storeAvailable) {
       return _buyStub(sku: sku, productType: productType);
     }
     await initialize();
@@ -223,8 +261,12 @@ class IapPurchaseService {
     Object? error;
     try {
       final token = purchase.verificationData.serverVerificationData;
+      // Was hardcoded to 'google'. Harmless while iOS could never reach
+      // this method, and a live bug the moment it could: an Apple
+      // StoreKit JWS posted as a Google receipt hits the Play verifier,
+      // which rejects it in a way that reads as a server fault.
       final res = await _billingApi.iapVerify(
-        platform: 'google',
+        platform: _platform,
         productSku: purchase.productID,
         region: _region,
         receipt: token,
@@ -280,7 +322,7 @@ class IapPurchaseService {
   /// changes, prefer the server field over the prefix check.
   Future<void> _finaliseGrantedPurchase(PurchaseDetails purchase) async {
     // `dart:io`'s `Platform` throws on web; but we can't reach this
-    // path on web anyway (`playAvailable` returns false → `buy` takes
+    // path on web anyway (`storeAvailable` returns false → `buy` takes
     // the STUB branch and this method is never called). `kIsWeb`
     // guard is belt-and-suspenders.
     if (!kIsWeb && Platform.isAndroid && _isConsumableSku(purchase.productID)) {
@@ -303,11 +345,9 @@ class IapPurchaseService {
     // Server routes on `platform` — iOS uses the Apple stub, Android
     // without Play uses the Google stub, web + desktop currently
     // fall through as `google` (server accepts either stub route
-    // regardless of the true origin). `dart:io`'s `Platform` isn't
-    // safe on web, so short-circuit via `kIsWeb` before probing it.
-    final platform = (!kIsWeb && Platform.isIOS) ? 'apple' : 'google';
+    // regardless of the true origin).
     final res = await _billingApi.iapVerify(
-      platform: platform,
+      platform: _platform,
       productSku: sku,
       region: _region,
       receipt: receipt,
