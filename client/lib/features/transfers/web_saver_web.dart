@@ -27,18 +27,16 @@ Future<String?> saveBytesWeb({
 }) async {
   final blob = _blobFromBytes(bytes, mimeType);
   final win = web.window;
-  final hasFsa = win.has('showSaveFilePicker');
-  if (hasFsa) {
-    try {
-      return await _saveViaFsa(win, blob, filename);
-    } on _FsaUserAbort {
-      return null;
-    } on Object {
-      // Any FSA-side failure (permission denied, write mid-stream
-      // failure, …) falls through to the anchor fallback so the user
-      // still gets their file.
-    }
+  if (win.has('showSaveFilePicker')) {
+    // Cancellation returns null from here rather than throwing, and is
+    // NOT retried through the anchor: the anchor path drops the file
+    // into Downloads with no prompt, so falling back on cancel would
+    // write a decrypted file to disk immediately after the user
+    // declined to save it.
+    return _saveViaFsa(win, blob, filename);
   }
+  // Anchor fallback is for browsers with no FSA at all (Firefox,
+  // Safari), not for an FSA call that failed.
   _saveViaAnchor(blob, filename);
   return filename;
 }
@@ -52,16 +50,31 @@ web.Blob _blobFromBytes(Uint8List bytes, String? mimeType) {
   return web.Blob(parts, options);
 }
 
-Future<String> _saveViaFsa(
+/// Returns the saved name, or `null` if the user cancelled the picker.
+Future<String?> _saveViaFsa(
   web.Window win,
   web.Blob blob,
   String filename,
 ) async {
   final options = _SaveFilePickerOptions(suggestedName: filename);
-  final handleJs = await _showSaveFilePicker(win, options).toDart;
-  if (handleJs.isUndefinedOrNull) {
-    throw const _FsaUserAbort();
+  final JSAny? handleJs;
+  try {
+    // Called as a METHOD on window. The previous binding was a
+    // top-level `showSaveFilePicker(window, options)` taking two
+    // arguments, but the API takes at most one — so the browser read
+    // the options dictionary off the Window object (where
+    // `suggestedName` is undefined) and dropped the real options as a
+    // surplus argument. The picker opened with an empty filename and
+    // no Dart-side default could reach it.
+    handleJs = await win.fsa.showSaveFilePicker(options).toDart;
+  } on Object catch (err) {
+    // The user dismissing the picker REJECTS the promise with an
+    // AbortError — it does not resolve to null, so the old
+    // `isUndefinedOrNull` check could never fire.
+    if (_isAbortError(err)) return null;
+    rethrow;
   }
+  if (handleJs.isUndefinedOrNull) return null;
   final handle = handleJs as _FileSystemFileHandle;
   final writable = await handle.createWritable().toDart;
   try {
@@ -70,6 +83,18 @@ Future<String> _saveViaFsa(
     await writable.close().toDart;
   }
   return handle.name;
+}
+
+/// True when a rejected FSA promise carries `DOMException.name ==
+/// 'AbortError'` — i.e. the user cancelled rather than anything
+/// failing. Written defensively: a non-JS error simply isn't an abort.
+bool _isAbortError(Object err) {
+  try {
+    final name = (err as JSObject).getProperty<JSString?>('name'.toJS);
+    return name?.toDart == 'AbortError';
+  } on Object {
+    return false;
+  }
 }
 
 void _saveViaAnchor(web.Blob blob, String filename) {
@@ -87,24 +112,28 @@ void _saveViaAnchor(web.Blob blob, String filename) {
   }
 }
 
-/// User cancelled the FSA picker. Internal signal so the fallback
-/// stays out of the picture — the user explicitly said "no", we do
-/// NOT then drop the file into Downloads without asking.
-class _FsaUserAbort implements Exception {
-  const _FsaUserAbort();
-}
-
 extension on web.Window {
   bool has(String name) =>
       (this as JSObject).hasProperty(name.toJS).toDart;
+
+  /// Reinterpret the window as its File System Access surface, so the
+  /// picker is invoked as `window.showSaveFilePicker(options)` — a
+  /// method call with the receiver bound — rather than as a top-level
+  /// function taking the window as its first argument.
+  _FsaWindow get fsa => _FsaWindow(this as JSObject);
 }
 
 /// Minimal FSA bindings — `package:web` doesn't ship them yet.
-@JS('showSaveFilePicker')
-external JSPromise<JSAny?> _showSaveFilePicker(
-  web.Window window,
-  _SaveFilePickerOptions options,
-);
+///
+/// Declared as a member of the window rather than a top-level `@JS`
+/// function on purpose: `showSaveFilePicker` accepts at most ONE
+/// argument, so a two-argument top-level binding puts the Window where
+/// the options dictionary belongs and the suggested name is lost.
+extension type _FsaWindow(JSObject _) implements JSObject {
+  external JSPromise<JSAny?> showSaveFilePicker(
+    _SaveFilePickerOptions options,
+  );
+}
 
 extension type _SaveFilePickerOptions._(JSObject _) implements JSObject {
   external factory _SaveFilePickerOptions({String suggestedName});
