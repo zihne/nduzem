@@ -1,0 +1,71 @@
+name: client
+
+# First CI for this repo. The trigger: the crypto test suite had been
+# reporting "passed" while executing no assertions at all — libsodium
+# could not load under `flutter test`, so every crypto test hit an early
+# `return`. Nothing independent of a developer's laptop was ever running
+# these, so nothing caught it. See test/crypto/sodium_test_support.dart.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # A new push to the same ref supersedes the previous run.
+  group: client-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The crypto tests exercise real libsodium through FFI rather than
+      # the Flutter plugin, which needs a platform this runner does not
+      # have. Discovery finds the packaged .so; REQUIRE_LIBSODIUM below
+      # turns "not found" into a failure instead of a silent skip.
+      - name: Install libsodium
+        run: sudo apt-get update && sudo apt-get install -y libsodium23
+
+      - uses: subosito/flutter-action@v2
+        with:
+          # Matches the local toolchain. Pinned rather than `stable`
+          # so a Flutter release cannot turn a green branch red without
+          # a commit that says so.
+          flutter-version: '3.47.0-0.2.pre'
+          channel: beta
+          cache: true
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze lib/ test/
+
+      # No repo-wide `dart format --set-exit-if-changed` gate: 47 of 91
+      # files currently disagree with the formatter, so it would fail on
+      # day one, and reformatting them is a large unrelated diff that
+      # should be its own deliberate commit rather than a side effect of
+      # adding CI. Worth doing — just not here.
+
+      - name: Test
+        env:
+          # Absence of libsodium must fail the build. Without this the
+          # crypto tests would skip, the run would be green, and CI
+          # would reproduce in the cloud exactly the blind spot it was
+          # added to close.
+          REQUIRE_LIBSODIUM: '1'
+        run: flutter test
+
+      # The web build is the artefact most likely to break silently:
+      # `dart:js_interop` bindings are checked at compile time only, and
+      # a wrong one still analyzes cleanly (see the showSaveFilePicker
+      # binding, which passed analysis while dropping its arguments).
+      - name: Build web
+        run: flutter build web --release

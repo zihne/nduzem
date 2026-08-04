@@ -49,7 +49,8 @@ class FileCrypto {
   static const int plaintextChunkBytes = 64 * 1024; // 64 KiB
 
   /// 32 random bytes — the symmetric key for a single transfer.
-  Uint8List generateFileKey() => _sodium.crypto.secretStream.keygen().extractBytes();
+  Uint8List generateFileKey() =>
+      _sodium.crypto.secretStream.keygen().extractBytes();
 
   /// Ciphertext bytes per full secretstream chunk (plaintext + AEAD
   /// overhead). Exposed for tests + the receive path's chunk stepper.
@@ -68,16 +69,38 @@ class FileCrypto {
   /// an incorrect estimate is caught then, not silently.
   ///
   /// Formula: `magicPrefix(4) + secretstream_header(24) + plaintextLen
-  /// + chunkCount * aBytes(17)`, where `chunkCount` matches
-  /// [`_plainStream`]'s emission pattern: one empty final chunk for
-  /// empty plaintext, otherwise `ceil(plaintextLen / plaintextChunkBytes)`.
+  /// + chunkCount * aBytes(17)`.
+  ///
+  /// `chunkCount` is NOT simply `ceil(plaintextLen / chunkBytes)`. When
+  /// the plaintext ends exactly on a chunk boundary, `pushChunked` has
+  /// no trailing partial chunk to carry the FINAL tag, so it emits one
+  /// additional empty chunk — costing another `aBytes`. `encryptFile`
+  /// has always sized its buffer for that extra chunk; this estimate
+  /// did not, and returned 17 bytes short for every plaintext that is a
+  /// non-zero multiple of 64 KiB.
+  ///
+  /// That mattered because the value goes to `/initiate` as
+  /// `byte_count`, which is what the server divides by the multipart
+  /// part size to decide how many part URLs to presign. An estimate
+  /// short of the truth can leave the final bytes with no presigned
+  /// part to go in — deterministically, for any file whose ciphertext
+  /// lands within 17 bytes above a part-size multiple.
   int estimateCiphertextLength(int plaintextLen) {
     final aBytes = _sodium.crypto.secretStream.aBytes;
     final headerBytes = _sodium.crypto.secretStream.headerBytes;
-    final chunkCount = plaintextLen == 0
-        ? 1
-        : (plaintextLen + plaintextChunkBytes - 1) ~/ plaintextChunkBytes;
-    return magicPrefix.length + headerBytes + plaintextLen + chunkCount * aBytes;
+    final int chunkCount;
+    if (plaintextLen == 0) {
+      chunkCount = 1; // the lone empty FINAL chunk
+    } else {
+      final full =
+          (plaintextLen + plaintextChunkBytes - 1) ~/ plaintextChunkBytes;
+      final endsOnBoundary = plaintextLen % plaintextChunkBytes == 0;
+      chunkCount = endsOnBoundary ? full + 1 : full;
+    }
+    return magicPrefix.length +
+        headerBytes +
+        plaintextLen +
+        chunkCount * aBytes;
   }
 
   /// Encrypt `plaintext` into the OS4S container. The whole plaintext
@@ -155,7 +178,9 @@ class FileCrypto {
     required Uint8List key,
   }) async {
     if (ciphertextBlob.length < magicPrefix.length) {
-      throw const FormatException('ciphertext too short to contain the magic prefix');
+      throw const FormatException(
+        'ciphertext too short to contain the magic prefix',
+      );
     }
     for (var i = 0; i < magicPrefix.length; i++) {
       if (ciphertextBlob[i] != magicPrefix[i]) {
