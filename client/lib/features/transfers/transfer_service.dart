@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as dart_crypto;
+import 'package:sodium_libs/sodium_libs.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
@@ -17,6 +18,8 @@ import '../../crypto/file_crypto.dart';
 import '../../crypto/plaintext_destination.dart';
 import '../../crypto/plaintext_source.dart';
 import '../../crypto/sealed_box.dart';
+import '../../crypto/suite.dart';
+import '../../crypto/suite_keys.dart';
 import '../../storage/secure_storage.dart';
 
 /// Orchestrates the send + receive flows end-to-end (spec §5.2/§5.3).
@@ -49,6 +52,7 @@ class TransferService {
     required FileCrypto fileCrypto,
     required Envelope envelope,
     required SecureStore storage,
+    required Sodium sodium,
     http.Client? httpClient,
   })  : _transfers = transfers,
         _links = links,
@@ -57,6 +61,7 @@ class TransferService {
         _fileCrypto = fileCrypto,
         _envelope = envelope,
         _storage = storage,
+        _sodium = sodium,
         _http = httpClient;
 
   final TransfersApi _transfers;
@@ -66,6 +71,7 @@ class TransferService {
   final FileCrypto _fileCrypto;
   final Envelope _envelope;
   final SecureStore _storage;
+  final Sodium _sodium;
   final http.Client? _http;
 
   http.Client get _httpClient => _http ?? http.Client();
@@ -152,6 +158,13 @@ class TransferService {
     try {
       // 1. Fresh K_file for this transfer.
       final fileKey = _fileCrypto.generateFileKey();
+      // Everything this client SENDS is suite 2: K_file is split into
+      // domain-separated subkeys so the body secretstream and the
+      // header secretbox never share a key. `wrapped_key` still carries
+      // the raw K_file — the recipient re-derives, so the split costs
+      // nothing on the wire.
+      const sendSuite = CryptoSuite.classicalSplitKeys;
+      final suiteKeys = SuiteKeys.derive(_sodium, fileKey, sendSuite);
 
       // 2. Precompute the ciphertext byte_count so /initiate can size
       // the multipart plan. Server re-measures at /commit and rejects
@@ -206,6 +219,7 @@ class TransferService {
         recipientEmail: recipientEmail,
         byteCount: byteCount,
         maxDownloads: maxDownloads,
+        cryptoSuite: sendSuite.wireValue,
       );
 
       // 6. Stream-encrypt + upload interleaved. Anything from here
@@ -221,7 +235,7 @@ class TransferService {
         // — surfacing both would oscillate the bar.
         final handle = _fileCrypto.encryptToStream(
           source: source,
-          key: fileKey,
+          key: suiteKeys.bodyKey,
           throwIfCancelled: cancel?.throwIfCancelled,
         );
 
@@ -258,7 +272,7 @@ class TransferService {
           mime: source.mimeType,
           plaintextLength: source.lengthBytes,
           blobSha256Hex: summary.blobSha256Hex,
-          fileKey: fileKey,
+          fileKey: suiteKeys.headerKey,
         );
         final signature = _envelope.signBlobSha256(
           blobSha256Hex: summary.blobSha256Hex,
@@ -447,6 +461,14 @@ class TransferService {
     try {
       // 1. Get presigned URL + envelope.
       final dl = await _transfers.requestDownload(transferId);
+      // Fail closed on a suite this build does not implement. `suite.dart`
+      // has always documented this rule — "any envelope carrying an
+      // unknown suite MUST fail closed rather than silently mis-decrypt"
+      // — but `fromWire` was never called outside its own test, so the
+      // field was parsed off the wire and ignored. An envelope from a
+      // future suite would have been fed to the suite-1 primitives and
+      // failed with an opaque AEAD error at best.
+      final suite = CryptoSuite.fromWire(dl.cryptoSuite);
       if (dl.wrappedKeyB64 == null) {
         throw StateError(
           'This transfer is link-mode (wrapped_key is null). Link mode '
@@ -466,152 +488,158 @@ class TransferService {
             );
 
       try {
-      // 2. Download the ciphertext, hashing as we go. Rolling
-      // SHA-256 verifies integrity without a second pass.
-      // `Content-Length` from the storage layer is the progress total;
-      // falls back to the envelope's declared byte_count if the
-      // header is missing.
-      final int downloadedLength;
-      final Uint8List? ciphertextBytes;
-      if (ciphertextFile != null) {
-        downloadedLength = await _streamDownloadWithHashToFile(
-          url: dl.downloadUrl,
-          destination: ciphertextFile,
-          expectedSha256Hex: dl.blobSha256Hex,
-          onProgress: onProgress,
-          cancel: cancel,
-        );
-        ciphertextBytes = null;
-      } else {
-        final result = await _streamDownloadWithHashToBytes(
-          url: dl.downloadUrl,
-          expectedSha256Hex: dl.blobSha256Hex,
-          onProgress: onProgress,
-          cancel: cancel,
-        );
-        downloadedLength = result.length;
-        ciphertextBytes = result;
-      }
+        // 2. Download the ciphertext, hashing as we go. Rolling
+        // SHA-256 verifies integrity without a second pass.
+        // `Content-Length` from the storage layer is the progress total;
+        // falls back to the envelope's declared byte_count if the
+        // header is missing.
+        final int downloadedLength;
+        final Uint8List? ciphertextBytes;
+        if (ciphertextFile != null) {
+          downloadedLength = await _streamDownloadWithHashToFile(
+            url: dl.downloadUrl,
+            destination: ciphertextFile,
+            expectedSha256Hex: dl.blobSha256Hex,
+            onProgress: onProgress,
+            cancel: cancel,
+          );
+          ciphertextBytes = null;
+        } else {
+          final result = await _streamDownloadWithHashToBytes(
+            url: dl.downloadUrl,
+            expectedSha256Hex: dl.blobSha256Hex,
+            onProgress: onProgress,
+            cancel: cancel,
+          );
+          downloadedLength = result.length;
+          ciphertextBytes = result;
+        }
 
-      // 3. Verify the sender signature — same wire contract as the
-      // in-memory path (ADR-0031). Skipped when the sender has erased
-      // themselves and the server withheld their pubkey.
-      var senderSignatureVerified = false;
-      final senderSigningPubB64 = dl.senderSigningPubB64;
-      if (senderSigningPubB64 != null) {
-        final ok = _envelope.verifyBlobSha256Signature(
-          blobSha256Hex: dl.blobSha256Hex,
-          signature: base64Decode(dl.signatureB64),
-          senderSigningPublic: base64Decode(senderSigningPubB64),
-        );
-        if (!ok) {
+        // 3. Verify the sender signature — same wire contract as the
+        // in-memory path (ADR-0031). Skipped when the sender has erased
+        // themselves and the server withheld their pubkey.
+        var senderSignatureVerified = false;
+        final senderSigningPubB64 = dl.senderSigningPubB64;
+        if (senderSigningPubB64 != null) {
+          final ok = _envelope.verifyBlobSha256Signature(
+            blobSha256Hex: dl.blobSha256Hex,
+            signature: base64Decode(dl.signatureB64),
+            senderSigningPublic: base64Decode(senderSigningPubB64),
+          );
+          if (!ok) {
+            throw StateError(
+              "Sender's signature does not verify against their "
+              'signing_pub — refusing to decrypt.',
+            );
+          }
+          senderSignatureVerified = true;
+        }
+
+        // 4. Unseal wrapped_key with our identity keypair. ADR-0011: the
+        // keypair lives in userId-scoped slots so this device can host
+        // more than one account without stepping on itself.
+        final activeUserId = await _storage.read(SecureStore.kUserId);
+        if (activeUserId == null) {
           throw StateError(
-            "Sender's signature does not verify against their "
-            'signing_pub — refusing to decrypt.',
+            'No signed-in user on this device. Sign in before receiving.',
           );
         }
-        senderSignatureVerified = true;
-      }
-
-      // 4. Unseal wrapped_key with our identity keypair. ADR-0011: the
-      // keypair lives in userId-scoped slots so this device can host
-      // more than one account without stepping on itself.
-      final activeUserId = await _storage.read(SecureStore.kUserId);
-      if (activeUserId == null) {
-        throw StateError(
-          'No signed-in user on this device. Sign in before receiving.',
+        final identityPriv = await _storage.readBytes(
+          SecureStore.identityPrivateKeyFor(activeUserId),
         );
-      }
-      final identityPriv = await _storage.readBytes(
-        SecureStore.identityPrivateKeyFor(activeUserId),
-      );
-      final identityPub = await _storage.readBytes(
-        SecureStore.identityPublicKeyFor(activeUserId),
-      );
-      if (identityPriv == null || identityPub == null) {
-        throw StateError(
-          "This device doesn't have the identity keypair for this "
-          'account. The account was likely created on another device, or '
-          'an older app version overwrote the keys when a second account '
-          'was registered here. Sign in from the device where this '
-          'account was originally registered to decrypt received '
-          'transfers.',
+        final identityPub = await _storage.readBytes(
+          SecureStore.identityPublicKeyFor(activeUserId),
         );
-      }
-      final fileKey = _sealedBox.sealOpen(
-        ciphertext: base64Decode(dl.wrappedKeyB64!),
-        recipientIdentityPublic: identityPub,
-        recipientIdentityPrivate: identityPriv,
-      );
-
-      // 5. Decrypt enc_header (small, in-memory — unchanged from M2).
-      final header = _envelope.openEncHeader(
-        encHeader: base64Decode(dl.encHeaderB64),
-        fileKey: fileKey,
-      );
-
-      // 6. Stream-decrypt the ciphertext temp file into a plaintext
-      // destination (ADR-0013 Phase 5). Mobile writes chunks to a
-      // fresh plaintext temp file; web (Phase 6) will land the
-      // chunks in a Blob / File-System-Access writer. Throws
-      // FormatException on missing OS4S magic and SodiumException
-      // on any AEAD failure.
-      cancel?.throwIfCancelled();
-      onProgress?.call(ReceivePhase.decrypting, 0, downloadedLength);
-      final PlaintextDestination dest = tempDir == null
-          ? BlobPlaintextDestination()
-          : await FilePlaintextDestination.newTempFile(tempDir);
-      final DecryptSummary summary;
-      try {
-        final handle = _fileCrypto.decryptToStream(
-          ciphertextStream: ciphertextFile == null
-              ? Stream<List<int>>.value(ciphertextBytes!)
-              : ciphertextFile.openRead(),
-          key: fileKey,
-          ciphertextTotalBytes: downloadedLength,
-          onProgress: (done, total) =>
-              onProgress?.call(ReceivePhase.decrypting, done, total),
-          throwIfCancelled: cancel?.throwIfCancelled,
-        );
-        await for (final chunk in handle.stream) {
-          await dest.add(chunk);
+        if (identityPriv == null || identityPub == null) {
+          throw StateError(
+            "This device doesn't have the identity keypair for this "
+            'account. The account was likely created on another device, or '
+            'an older app version overwrote the keys when a second account '
+            'was registered here. Sign in from the device where this '
+            'account was originally registered to decrypt received '
+            'transfers.',
+          );
         }
-        await dest.close();
-        summary = await handle.done;
-      } on Object {
-        await dest.discard();
-        rethrow;
-      }
-
-      // Guardrail: what the header claimed the length would be MUST
-      // match what we actually decrypted. Any mismatch is a
-      // tampering signal.
-      if (summary.plaintextLength != header.plaintextLength) {
-        // Clean the plaintext temp we just wrote before we throw.
-        await dest.discard();
-        throw StateError(
-          'Decrypted plaintext length (${summary.plaintextLength}) '
-          'does not match the header claim (${header.plaintextLength}).',
+        final fileKey = _sealedBox.sealOpen(
+          ciphertext: base64Decode(dl.wrappedKeyB64!),
+          recipientIdentityPublic: identityPub,
+          recipientIdentityPrivate: identityPriv,
         );
-      }
 
-      return DecryptedTransfer(
-        transferId: transferId,
-        // Sanitise the filename so a malicious sender can't inject
-        // path separators / suspicious names into the eventual save
-        // dialog.
-        filename: _sanitiseFilename(header.filename, transferId),
-        mime: header.mime,
-        plaintextPath:
-            dest is FilePlaintextDestination ? dest.path : null,
-        plaintextBytes:
-            dest is BlobPlaintextDestination ? dest.bytes : null,
-        plaintextLength: summary.plaintextLength,
-        senderSignatureVerified: senderSignatureVerified,
-        senderIdentityPubB64: dl.senderIdentityPubB64,
-        senderId: dl.senderId,
-        senderHandle: dl.senderHandle,
-      );
+        // 5. Decrypt enc_header (small, in-memory — unchanged from M2).
+        // Subkeys per the envelope's OWN suite, not the one we send
+        // with: a suite-1 transfer created before this build, or one in
+        // flight across the deploy, must still open.
+        final suiteKeys = SuiteKeys.derive(_sodium, fileKey, suite);
+        final header = _envelope.openEncHeader(
+          encHeader: base64Decode(dl.encHeaderB64),
+          fileKey: suiteKeys.headerKey,
+        );
+        assertHeaderBindsBlobHash(
+          headerBlobSha256Hex: header.blobSha256Hex,
+          serverBlobSha256Hex: dl.blobSha256Hex,
+        );
+
+        // 6. Stream-decrypt the ciphertext temp file into a plaintext
+        // destination (ADR-0013 Phase 5). Mobile writes chunks to a
+        // fresh plaintext temp file; web (Phase 6) will land the
+        // chunks in a Blob / File-System-Access writer. Throws
+        // FormatException on missing OS4S magic and SodiumException
+        // on any AEAD failure.
+        cancel?.throwIfCancelled();
+        onProgress?.call(ReceivePhase.decrypting, 0, downloadedLength);
+        final PlaintextDestination dest = tempDir == null
+            ? BlobPlaintextDestination()
+            : await FilePlaintextDestination.newTempFile(tempDir);
+        final DecryptSummary summary;
+        try {
+          final handle = _fileCrypto.decryptToStream(
+            ciphertextStream: ciphertextFile == null
+                ? Stream<List<int>>.value(ciphertextBytes!)
+                : ciphertextFile.openRead(),
+            key: suiteKeys.bodyKey,
+            ciphertextTotalBytes: downloadedLength,
+            onProgress: (done, total) =>
+                onProgress?.call(ReceivePhase.decrypting, done, total),
+            throwIfCancelled: cancel?.throwIfCancelled,
+          );
+          await for (final chunk in handle.stream) {
+            await dest.add(chunk);
+          }
+          await dest.close();
+          summary = await handle.done;
+        } on Object {
+          await dest.discard();
+          rethrow;
+        }
+
+        // Guardrail: what the header claimed the length would be MUST
+        // match what we actually decrypted. Any mismatch is a
+        // tampering signal.
+        if (summary.plaintextLength != header.plaintextLength) {
+          // Clean the plaintext temp we just wrote before we throw.
+          await dest.discard();
+          throw StateError(
+            'Decrypted plaintext length (${summary.plaintextLength}) '
+            'does not match the header claim (${header.plaintextLength}).',
+          );
+        }
+
+        return DecryptedTransfer(
+          transferId: transferId,
+          // Sanitise the filename so a malicious sender can't inject
+          // path separators / suspicious names into the eventual save
+          // dialog.
+          filename: _sanitiseFilename(header.filename, transferId),
+          mime: header.mime,
+          plaintextPath: dest is FilePlaintextDestination ? dest.path : null,
+          plaintextBytes: dest is BlobPlaintextDestination ? dest.bytes : null,
+          plaintextLength: summary.plaintextLength,
+          senderSignatureVerified: senderSignatureVerified,
+          senderIdentityPubB64: dl.senderIdentityPubB64,
+          senderId: dl.senderId,
+          senderHandle: dl.senderHandle,
+        );
       } finally {
         // Always drop the ciphertext temp file (mobile only — web
         // ciphertext lived in memory and drops when the buffer is
@@ -710,15 +738,13 @@ class TransferService {
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
       throw ApiException(
         statusCode: resp.statusCode,
-        message:
-            'Download from storage failed (HTTP ${resp.statusCode}).',
+        message: 'Download from storage failed (HTTP ${resp.statusCode}).',
       );
     }
     final totalBytes = resp.contentLength ?? 0;
 
     dart_crypto.Digest? capturedDigest;
-    final digestSink =
-        ChunkedConversionSink<dart_crypto.Digest>.withCallback(
+    final digestSink = ChunkedConversionSink<dart_crypto.Digest>.withCallback(
       (digests) => capturedDigest = digests.single,
     );
     final hasher = dart_crypto.sha256.startChunkedConversion(digestSink);
@@ -806,6 +832,8 @@ class TransferService {
       // 1. Presigned URL + envelope. This is also the point at which
       // the password gets checked and download_count increments.
       final dl = await _links.download(transferId, password: password);
+      // Same fail-closed check as app mode — see the note there.
+      final suite = CryptoSuite.fromWire(dl.cryptoSuite);
 
       // Same platform split as [receive]: mobile stages ciphertext on
       // disk, web keeps it in memory.
@@ -847,9 +875,17 @@ class TransferService {
         //    verified" so users understand the semantics.
 
         // 4. Decrypt enc_header with the fragment-supplied file key.
+        // Subkeys per the envelope's OWN suite, not the one we send
+        // with: a suite-1 transfer created before this build, or one in
+        // flight across the deploy, must still open.
+        final suiteKeys = SuiteKeys.derive(_sodium, fileKey, suite);
         final header = _envelope.openEncHeader(
           encHeader: base64Decode(dl.encHeaderB64),
-          fileKey: fileKey,
+          fileKey: suiteKeys.headerKey,
+        );
+        assertHeaderBindsBlobHash(
+          headerBlobSha256Hex: header.blobSha256Hex,
+          serverBlobSha256Hex: dl.blobSha256Hex,
         );
 
         // 5. Stream-decrypt ciphertext → plaintext destination
@@ -865,7 +901,7 @@ class TransferService {
             ciphertextStream: ciphertextFile == null
                 ? Stream<List<int>>.value(ciphertextBytes!)
                 : ciphertextFile.openRead(),
-            key: fileKey,
+            key: suiteKeys.bodyKey,
             ciphertextTotalBytes: downloadedLength,
             onProgress: (done, total) =>
                 onProgress?.call(ReceivePhase.decrypting, done, total),
@@ -893,10 +929,8 @@ class TransferService {
           transferId: transferId,
           filename: _sanitiseFilename(header.filename, transferId),
           mime: header.mime,
-          plaintextPath:
-              dest is FilePlaintextDestination ? dest.path : null,
-          plaintextBytes:
-              dest is BlobPlaintextDestination ? dest.bytes : null,
+          plaintextPath: dest is FilePlaintextDestination ? dest.path : null,
+          plaintextBytes: dest is BlobPlaintextDestination ? dest.bytes : null,
           plaintextLength: summary.plaintextLength,
           // Link mode has no signature to verify against — the
           // JS decrypt page skips this same step (ADR-0010).

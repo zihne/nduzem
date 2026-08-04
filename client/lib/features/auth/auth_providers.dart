@@ -170,6 +170,7 @@ final transferServiceProvider = FutureProvider<TransferService>((ref) async {
   final fileCrypto = await ref.watch(fileCryptoProvider.future);
   final envelope = await ref.watch(envelopeProvider.future);
   final storage = ref.watch(secureStorageProvider);
+  final sodium = await ref.watch(sodiumProvider.future);
   return TransferService(
     transfers: transfers,
     links: wiring.linksApi,
@@ -178,6 +179,7 @@ final transferServiceProvider = FutureProvider<TransferService>((ref) async {
     fileCrypto: fileCrypto,
     envelope: envelope,
     storage: storage,
+    sodium: sodium,
   );
 });
 

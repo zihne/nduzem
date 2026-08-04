@@ -171,3 +171,44 @@ class DecryptedHeader {
   final int plaintextLength;
   final String blobSha256Hex;
 }
+
+/// Bind the ciphertext we just verified to the hash the SENDER
+/// authenticated, not merely the one the server reported.
+///
+/// The downloaded bytes are hashed and checked against
+/// `dl.blob_sha256`, and the sender's signature is verified over that
+/// same value — but both come from the server. `enc_header` carries
+/// its own copy of `blob_sha256`, and that one is sealed under K_file,
+/// which the server never holds. Asserting the two agree makes the
+/// download transitively checked against the authenticated value:
+///
+///   computed == dl.blob_sha256  (checked during download)
+///   dl.blob_sha256 == header.blob_sha256  (checked here)
+///   ⇒ computed == header.blob_sha256
+///
+/// Calibration, so nobody mistakes this for more than it is: a fully
+/// compromised server can still mint its own K_file, seal it to the
+/// recipient (`crypto_box_seal` needs only their public key) and
+/// rebuild header, blob, signature and signing_pub consistently. Only
+/// out-of-band fingerprint verification catches that. What this check
+/// buys is defence against PARTIAL compromise — storage tampered with
+/// independently of the database, or the reverse — and against our own
+/// bugs. It closes the gap between what `enc_header`'s `blob_sha256`
+/// field was documented to do ("re-verify locally without trusting the
+/// download response") and what it actually did, which was nothing:
+/// the field was decoded into `DecryptedHeader` and never read.
+void assertHeaderBindsBlobHash({
+  required String headerBlobSha256Hex,
+  required String serverBlobSha256Hex,
+}) {
+  // Case-insensitive: both sides should be lowercase hex, but a
+  // case difference is a formatting quirk, not a tampering signal,
+  // and failing on it would be a self-inflicted outage.
+  if (headerBlobSha256Hex.toLowerCase() != serverBlobSha256Hex.toLowerCase()) {
+    throw StateError(
+      'Envelope header names a different ciphertext than the server '
+      'reported (header=$headerBlobSha256Hex, '
+      'server=$serverBlobSha256Hex) — refusing to decrypt.',
+    );
+  }
+}
