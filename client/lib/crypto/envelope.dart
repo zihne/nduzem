@@ -124,13 +124,38 @@ class Envelope {
     }
   }
 
+  /// Strict hex → bytes.
+  ///
+  /// `blob_sha256` arrives from the server and is therefore untrusted,
+  /// and `int.parse(radix: 16)` is lenient in ways that matter here — it
+  /// accepts signs and surrounding whitespace, so `"+1"`, `" 1"` and
+  /// `"1 "` all yield 1 (colliding with `"01"`), and `"-2"` yields -2,
+  /// which lands in a `Uint8List` as 254. Distinct strings would then
+  /// decode to identical bytes and verify under the same signature.
+  ///
+  /// Not exploitable as things stand: the ciphertext check compares
+  /// against canonical lowercase hex from `package:crypto`, so a
+  /// doctored string fails there. But the signature check and the
+  /// content check would be applying different notions of equality to
+  /// the same attacker-controlled field, and that divergence only has to
+  /// survive one refactor to become a real bug. Reject anything that is
+  /// not exactly `[0-9a-fA-F]` instead.
   Uint8List _hexDecode(String hex) {
     if (hex.length.isOdd) throw FormatException('odd-length hex: $hex');
     final out = Uint8List(hex.length ~/ 2);
     for (var i = 0; i < out.length; i++) {
-      out[i] = int.parse(hex.substring(i * 2, i * 2 + 2), radix: 16);
+      final hi = _hexDigit(hex.codeUnitAt(i * 2), hex);
+      final lo = _hexDigit(hex.codeUnitAt(i * 2 + 1), hex);
+      out[i] = (hi << 4) | lo;
     }
     return out;
+  }
+
+  int _hexDigit(int codeUnit, String whole) {
+    if (codeUnit >= 0x30 && codeUnit <= 0x39) return codeUnit - 0x30; // 0-9
+    if (codeUnit >= 0x61 && codeUnit <= 0x66) return codeUnit - 0x57; // a-f
+    if (codeUnit >= 0x41 && codeUnit <= 0x46) return codeUnit - 0x37; // A-F
+    throw FormatException('non-hex character in: $whole');
   }
 }
 

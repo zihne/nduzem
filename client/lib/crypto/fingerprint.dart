@@ -7,15 +7,26 @@ import 'package:crypto/crypto.dart';
 ///
 /// **Algorithm** (Signal-style):
 ///   1. digest = SHA-256(identity_pub || signing_pub)
-///   2. take first 8 bytes of the digest, mask to 60 bits
+///   2. take the first 16 bytes, reduce modulo 10^25
 ///   3. render as five 5-digit base-10 groups, space-separated
 ///
 /// e.g. `12345 67890 12345 67890 12345` — 25 digits + 4 spaces = 29 chars.
 ///
-/// 60 bits ≈ 1e18 possible values. Grinding a colliding fingerprint against
-/// a specific target key takes ~2^60 keypair operations — enough to make a
-/// key-substitution attack observably expensive under this display, while
-/// keeping the string short enough to read aloud in ~10 seconds.
+/// Five groups address exactly 10^25 (~2^83), so reducing modulo that
+/// uses the whole display. An earlier version masked to 60 bits instead;
+/// because 2^60 < 100000^4 the leading group was **always** `00000` and
+/// the second never exceeded `01152`, so roughly 8 of the 25 digits
+/// carried no information while costing the same to read aloud. Real
+/// strength was 60 bits — grinding a colliding fingerprint cost ~2^60
+/// keypair generations, which is no longer a comfortable margin. This is
+/// ~2^23 times harder at identical length.
+///
+/// **Must stay byte-for-byte identical to `key_fingerprint` in the
+/// server's `app/core/security.py`.** The client recomputes this from
+/// the public keys the server returns and refuses to send when the two
+/// disagree — that check is the defence against a substituted key, so a
+/// divergence does not degrade gracefully, it blocks sending outright.
+/// Shared golden vectors on both sides guard the invariant.
 ///
 /// Used for:
 ///   - Displaying the recipient's fingerprint at send time (TOFU).
@@ -65,6 +76,21 @@ class Fingerprint {
   String toString() => display;
 }
 
+/// 10^25 — the exact number of values five 5-digit groups can express.
+final BigInt _fingerprintModulus = BigInt.parse('10000000000000000000000000');
+
+/// Which derivation produced a given fingerprint string.
+///
+/// Bumped when [fingerprintOf] changes, so anything that PERSISTED a
+/// fingerprint can tell "computed differently" from "the key changed".
+/// Those must never be conflated: the second raises a key-substitution
+/// alarm, and raising it for every stored contact after an upgrade
+/// teaches users the alarm means "the app updated".
+///
+///   1 — SHA-256 masked to 60 bits (leading group always `00000`)
+///   2 — SHA-256[:16] mod 10^25, using the full 25-digit space
+const int fingerprintSchemeVersion = 2;
+
 /// Derive the fingerprint. Inputs are the raw public-key bytes exactly as
 /// they were generated / uploaded — NOT the base64 encoding.
 Fingerprint fingerprintOf({
@@ -76,13 +102,14 @@ Fingerprint fingerprintOf({
     ..add(signingPublic);
   final digest = sha256.convert(concat.toBytes()).bytes;
 
-  // First 8 bytes → uint64 → mask to 60 bits. Matches the server's
-  // `int.from_bytes(digest[:8], "big") & ((1 << 60) - 1)`.
+  // First 16 bytes → reduce mod 10^25. Matches the server's
+  // `int.from_bytes(digest[:16], "big") % 10**25`. Sixteen bytes
+  // (2^128) into a 10^25 modulus leaves a bias below 2^-100.
   var n = BigInt.zero;
-  for (var i = 0; i < 8; i++) {
+  for (var i = 0; i < 16; i++) {
     n = (n << 8) | BigInt.from(digest[i]);
   }
-  n = n & ((BigInt.one << 60) - BigInt.one);
+  n = n % _fingerprintModulus;
 
   // Extract 5 base-100000 digits, most-significant first.
   final groups = <String>[];

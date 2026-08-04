@@ -43,12 +43,12 @@ void main() {
       final at = DateTime.utc(2026, 7, 1, 12);
       await repo.markVerified(
         userId: bob,
-        canonical: '0000000583409474571453372',
+        canonical: '6770347913578480527288176',
         at: at,
       );
 
       expect(disk['vc.u-alice.u-bob'], isNotNull);
-      expect(disk['vc.u-alice.u-bob'], contains('0000000583409474571453372'));
+      expect(disk['vc.u-alice.u-bob'], contains('6770347913578480527288176'));
       expect(disk['vc.u-alice.u-bob'], contains(at.toIso8601String()));
       // Not written under the legacy shape.
       expect(disk['vc.u-bob'], isNull);
@@ -59,12 +59,42 @@ void main() {
     });
 
     test('read parses back the stored payload', () async {
-      disk['vc.u-alice.u-bob'] =
-          '{"fp":"0000000583409474571453372","at":"2026-07-01T12:00:00.000Z"}';
+      disk['vc.u-alice.u-bob'] = '{"fp":"6770347913578480527288176",'
+          '"at":"2026-07-01T12:00:00.000Z","fpv":2}';
       final vc = await repo.read(bob);
       expect(vc, isNotNull);
-      expect(vc!.canonical, '0000000583409474571453372');
+      expect(vc!.canonical, '6770347913578480527288176');
       expect(vc.at.toUtc().year, 2026);
+    });
+
+    test('a record from an older fingerprint scheme reads as ABSENT', () async {
+      // Deliberately NOT a mismatch. A mismatch raises "this contact's
+      // fingerprint has changed" — the key-substitution alarm. Firing
+      // that at every previously-verified contact just because the app
+      // changed how it derives fingerprints is the fastest way to teach
+      // users the alarm is noise. Absent means "verify again", which is
+      // both true and safe.
+      disk['vc.u-alice.u-bob'] = '{"fp":"0000000583409474571453372",'
+          '"at":"2026-07-01T12:00:00.000Z","fpv":1}';
+      expect(await repo.read(bob), isNull);
+    });
+
+    test('a record predating fingerprint versioning reads as ABSENT', () async {
+      // No `fpv` at all — written before the field existed, so scheme 1.
+      disk['vc.u-alice.u-bob'] =
+          '{"fp":"0000000583409474571453372","at":"2026-07-01T12:00:00.000Z"}';
+      expect(await repo.read(bob), isNull);
+    });
+
+    test('markVerified stamps the current scheme version', () async {
+      await repo.markVerified(
+        userId: bob,
+        canonical: '6770347913578480527288176',
+        at: DateTime.utc(2026, 7, 1, 12),
+      );
+      expect(disk['vc.u-alice.u-bob'], contains('"fpv":2'));
+      // And round-trips through read().
+      expect((await repo.read(bob))!.canonical, '6770347913578480527288176');
     });
 
     test('read tolerates a corrupted payload by returning null', () async {
@@ -108,8 +138,7 @@ void main() {
   });
 
   group('bleed regression (ADR-0012)', () {
-    test(
-        "Alice's verification of Bob does NOT appear when Charlie signs in",
+    test("Alice's verification of Bob does NOT appear when Charlie signs in",
         () async {
       final aliceRepo = VerifiedContactsRepo(store, localUserId: 'u-alice');
       final charlieRepo = VerifiedContactsRepo(store, localUserId: 'u-charlie');
@@ -134,14 +163,14 @@ void main() {
     test(
         'first op rewrites vc.<X> as vc.<localUserId>.<X> and '
         'deletes the legacy key', () async {
-      disk['vc.u-bob'] =
-          '{"fp":"legacy-fp","at":"2026-07-01T00:00:00.000Z"}';
+      disk['vc.u-bob'] = '{"fp":"legacy-fp","at":"2026-07-01T00:00:00.000Z"}';
       disk['vc.u-charlie'] =
           '{"fp":"another-legacy","at":"2026-07-01T00:00:00.000Z"}';
 
-      final vc = await repo.read(bob);
-      expect(vc, isNotNull);
-      expect(vc!.canonical, 'legacy-fp');
+      // Rescoping still happens — that is about storage layout. But the
+      // payload predates fingerprint versioning, so it reads as absent
+      // rather than as a changed key.
+      expect(await repo.read(bob), isNull);
 
       // Bob's record migrated to Alice's scope.
       expect(disk['vc.u-alice.u-bob'], contains('legacy-fp'));
@@ -155,8 +184,7 @@ void main() {
     test(
         'migration is idempotent — a second op after migration does '
         'nothing further', () async {
-      disk['vc.u-bob'] =
-          '{"fp":"legacy","at":"2026-07-01T00:00:00.000Z"}';
+      disk['vc.u-bob'] = '{"fp":"legacy","at":"2026-07-01T00:00:00.000Z"}';
 
       await repo.read(bob);
       final snapshot = Map<String, String>.from(disk);
@@ -170,8 +198,10 @@ void main() {
         'same counterparty', () async {
       // Alice re-verified Bob on the new build BEFORE migrating; the
       // migration must not clobber the fresh verification.
-      disk['vc.u-alice.u-bob'] =
-          '{"fp":"fresh-verify","at":"2026-07-05T00:00:00.000Z"}';
+      // Current-scheme record: this represents a verification the user
+      // performed on the new build, so it must survive the migration.
+      disk['vc.u-alice.u-bob'] = '{"fp":"fresh-verify",'
+          '"at":"2026-07-05T00:00:00.000Z","fpv":2}';
       disk['vc.u-bob'] =
           '{"fp":"stale-legacy","at":"2026-07-01T00:00:00.000Z"}';
 
@@ -183,8 +213,7 @@ void main() {
 
     test('no session → migration does not run', () async {
       final anon = VerifiedContactsRepo(store, localUserId: null);
-      disk['vc.u-bob'] =
-          '{"fp":"legacy","at":"2026-07-01T00:00:00.000Z"}';
+      disk['vc.u-bob'] = '{"fp":"legacy","at":"2026-07-01T00:00:00.000Z"}';
 
       await anon.read(bob);
       // Legacy stays put; without a local user id there's no one to

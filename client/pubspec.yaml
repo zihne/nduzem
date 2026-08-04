@@ -93,6 +93,13 @@ dev_dependencies:
   flutter_test: { sdk: flutter }
   flutter_lints: ^5.0.0
   mocktail: ^1.0.4
+  # The base package behind `sodium_libs`, pulled in directly so tests
+  # can load libsodium over FFI. `sodium_libs`' own initialiser resolves
+  # the native library through the Flutter plugin, which needs a real
+  # platform and throws under `flutter test` — see
+  # test/crypto/sodium_test_support.dart. Version tracks whatever
+  # sodium_libs already resolves, so this adds no new transitive code.
+  sodium: ^3.4.6
   # Generates Android + iOS launcher icons from `assets/branding/app_icon.png`
   # (opaque 1024 square, iOS + Android legacy) and
   # `app_icon_foreground.png` (Android adaptive foreground, transparent bg,

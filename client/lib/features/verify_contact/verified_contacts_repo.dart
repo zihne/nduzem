@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../../crypto/fingerprint.dart';
 import '../../storage/secure_storage.dart';
 
 /// Persists which counterparties the local user has verified out-of-band
@@ -87,6 +88,7 @@ class VerifiedContactsRepo {
     final payload = jsonEncode({
       'fp': canonical,
       'at': at.toIso8601String(),
+      'fpv': fingerprintSchemeVersion,
     });
     await _store.write(_keyFor(localUid, userId), payload);
   }
@@ -102,6 +104,16 @@ class VerifiedContactsRepo {
     if (raw == null) return null;
     try {
       final map = jsonDecode(raw) as Map<String, dynamic>;
+      // Records written under an older fingerprint derivation cannot be
+      // compared against a freshly computed one. Report them as ABSENT
+      // (TOFU: nudge to verify, allow the send) rather than letting the
+      // caller see a mismatch — a mismatch raises "this contact's
+      // fingerprint has changed", which is the key-substitution alarm.
+      // Firing it at every previously-verified contact after an upgrade
+      // would teach users that the alarm means "the app changed" and be
+      // the fastest possible way to make a real one ignorable.
+      final version = (map['fpv'] as num?)?.toInt() ?? 1;
+      if (version != fingerprintSchemeVersion) return null;
       return VerifiedContact(
         canonical: map['fp'] as String,
         at: DateTime.parse(map['at'] as String),

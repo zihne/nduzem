@@ -1,27 +1,78 @@
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:opaqueshare/crypto/fingerprint.dart';
 
 void main() {
   group('fingerprintOf', () {
-    test(
-      'matches the server-side algorithm on a known input',
-      () {
-        // Cross-checked against
-        //   `python -c "from app.core.security import key_fingerprint; \
-        //     print(key_fingerprint(bytes([1]*32), bytes([2]*32)))"`
-        // on the backend. If either side changes the algorithm, this
-        // test breaks — good.
+    // The same vectors are pinned server-side as FINGERPRINT_VECTORS in
+    // backend/tests/unit/test_security.py. The client recomputes the
+    // fingerprint from the keys the server returns and REFUSES TO SEND
+    // when the two disagree, so a divergence here does not degrade
+    // gracefully — it blocks sending. These exist so the two
+    // implementations can only move together.
+    test('matches the server on filled-byte keys', () {
+      final fp = fingerprintOf(
+        identityPublic: Uint8List.fromList(List.filled(32, 1)),
+        signingPublic: Uint8List.fromList(List.filled(32, 2)),
+      );
+      expect(fp.display, '67703 47913 57848 05272 88176');
+      expect(fp.canonical, '6770347913578480527288176');
+    });
+
+    test('matches the server on all-zero keys', () {
+      final fp = fingerprintOf(
+        identityPublic: Uint8List.fromList(List.filled(32, 0)),
+        signingPublic: Uint8List.fromList(List.filled(32, 0)),
+      );
+      expect(fp.display, '17504 27768 53253 73905 03835');
+    });
+
+    test('matches the server on sequential-byte keys', () {
+      final fp = fingerprintOf(
+        identityPublic: Uint8List.fromList(List<int>.generate(32, (i) => i)),
+        signingPublic:
+            Uint8List.fromList(List<int>.generate(32, (i) => i + 32)),
+      );
+      expect(fp.display, '29755 14947 17031 55051 47535');
+    });
+
+    test('uses the whole digit space — the leading groups vary', () {
+      // The previous derivation masked the digest to 60 bits, but five
+      // base-100000 groups address 10^25 and 2^60 < 100000^4, so the
+      // first group was ALWAYS '00000' and the second never exceeded
+      // '01152'. Roughly 8 of 25 digits were constant: a safety number
+      // that read as longer than the entropy it carried.
+      // Keys derived by hashing a counter. An arithmetic generator like
+      // `(i + j) & 0xff` looks varied but repeats every 256 iterations,
+      // capping the distinct keypairs well below the threshold and
+      // failing for reasons that have nothing to do with the fingerprint.
+      final leading = <String>{};
+      final second = <String>{};
+      for (var i = 0; i < 500; i++) {
+        final seed = Uint8List(4)..buffer.asByteData().setUint32(0, i);
         final fp = fingerprintOf(
-          identityPublic: Uint8List.fromList(List.filled(32, 1)),
-          signingPublic: Uint8List.fromList(List.filled(32, 2)),
+          identityPublic: Uint8List.fromList(sha256.convert(seed).bytes),
+          signingPublic: Uint8List.fromList(
+            sha256.convert([...seed, 0x78]).bytes,
+          ),
         );
-        const serverDisplay = '00000 00583 40947 45714 53372';
-        expect(fp.display, serverDisplay);
-        expect(fp.canonical, serverDisplay.replaceAll(' ', ''));
-      },
-    );
+        final groups = fp.display.split(' ');
+        leading.add(groups[0]);
+        second.add(groups[1]);
+      }
+      expect(
+        leading.length,
+        greaterThan(400),
+        reason: 'leading group barely varies — digit space unused',
+      );
+      expect(
+        second.length,
+        greaterThan(400),
+        reason: 'second group barely varies — digit space unused',
+      );
+    });
 
     test('canonical is 25 decimal digits; display is 5 groups of 5', () {
       final fp = fingerprintOf(
