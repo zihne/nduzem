@@ -12,6 +12,8 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../api/api_client.dart';
 import '../../api/links_api.dart';
+import '../../crypto/suite.dart';
+import '../../crypto/suite_keys.dart';
 import '../../native/saf_saver.dart';
 import '../auth/auth_providers.dart';
 import '../history/transfer_history_entry.dart';
@@ -164,9 +166,20 @@ class _LinkReceiveScreenState extends ConsumerState<LinkReceiveScreen> {
       final envelope = ref.read(envelopeProvider);
       final env = envelope.valueOrNull;
       if (env == null) return;
+      final sodium = ref.read(sodiumProvider).valueOrNull;
+      if (sodium == null) return;
+      // The header key depends on the envelope's suite: suite 1 uses
+      // K_file directly, suite 2 a derived subkey. Getting this wrong
+      // costs no security here — the header simply fails to open — but
+      // the catch below swallows that, so the preview would silently go
+      // blank rather than showing a filename.
+      final wire = info.cryptoSuite;
+      if (wire == null) return;
+      final suiteKeys =
+          SuiteKeys.derive(sodium, key, CryptoSuite.fromWire(wire));
       final header = env.openEncHeader(
         encHeader: Uint8List.fromList(base64Decode(headerB64)),
-        fileKey: key,
+        fileKey: suiteKeys.headerKey,
       );
       setState(() {
         _previewFilename = header.filename;
@@ -408,12 +421,13 @@ class _LinkReceiveScreenState extends ConsumerState<LinkReceiveScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Receive a shared file')),
       body: MaxWidthContent(
-          child: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: ListView(children: _body(context)),
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: ListView(children: _body(context)),
+          ),
         ),
-      ),),
+      ),
     );
   }
 
@@ -537,8 +551,7 @@ class _LinkReceiveScreenState extends ConsumerState<LinkReceiveScreen> {
         OutlinedButton.icon(
           // See send_screen — "Cancelling…" state for the gap between
           // click and the receive loop's next checkpoint.
-          onPressed:
-              (_cancel?.isCancelled ?? false) ? null : _cancelDownload,
+          onPressed: (_cancel?.isCancelled ?? false) ? null : _cancelDownload,
           icon: (_cancel?.isCancelled ?? false)
               ? const SizedBox(
                   height: 16,

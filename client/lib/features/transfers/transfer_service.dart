@@ -219,6 +219,7 @@ class TransferService {
         recipientEmail: recipientEmail,
         byteCount: byteCount,
         maxDownloads: maxDownloads,
+        cryptoSuite: sendSuite.wireValue,
       );
 
       // 6. Stream-encrypt + upload interleaved. Anything from here
@@ -467,7 +468,7 @@ class TransferService {
       // field was parsed off the wire and ignored. An envelope from a
       // future suite would have been fed to the suite-1 primitives and
       // failed with an opaque AEAD error at best.
-      CryptoSuite.fromWire(dl.cryptoSuite);
+      final suite = CryptoSuite.fromWire(dl.cryptoSuite);
       if (dl.wrappedKeyB64 == null) {
         throw StateError(
           'This transfer is link-mode (wrapped_key is null). Link mode '
@@ -566,9 +567,13 @@ class TransferService {
         );
 
         // 5. Decrypt enc_header (small, in-memory — unchanged from M2).
+        // Subkeys per the envelope's OWN suite, not the one we send
+        // with: a suite-1 transfer created before this build, or one in
+        // flight across the deploy, must still open.
+        final suiteKeys = SuiteKeys.derive(_sodium, fileKey, suite);
         final header = _envelope.openEncHeader(
           encHeader: base64Decode(dl.encHeaderB64),
-          fileKey: fileKey,
+          fileKey: suiteKeys.headerKey,
         );
         assertHeaderBindsBlobHash(
           headerBlobSha256Hex: header.blobSha256Hex,
@@ -592,7 +597,7 @@ class TransferService {
             ciphertextStream: ciphertextFile == null
                 ? Stream<List<int>>.value(ciphertextBytes!)
                 : ciphertextFile.openRead(),
-            key: fileKey,
+            key: suiteKeys.bodyKey,
             ciphertextTotalBytes: downloadedLength,
             onProgress: (done, total) =>
                 onProgress?.call(ReceivePhase.decrypting, done, total),
@@ -828,7 +833,7 @@ class TransferService {
       // the password gets checked and download_count increments.
       final dl = await _links.download(transferId, password: password);
       // Same fail-closed check as app mode — see the note there.
-      CryptoSuite.fromWire(dl.cryptoSuite);
+      final suite = CryptoSuite.fromWire(dl.cryptoSuite);
 
       // Same platform split as [receive]: mobile stages ciphertext on
       // disk, web keeps it in memory.
@@ -870,9 +875,13 @@ class TransferService {
         //    verified" so users understand the semantics.
 
         // 4. Decrypt enc_header with the fragment-supplied file key.
+        // Subkeys per the envelope's OWN suite, not the one we send
+        // with: a suite-1 transfer created before this build, or one in
+        // flight across the deploy, must still open.
+        final suiteKeys = SuiteKeys.derive(_sodium, fileKey, suite);
         final header = _envelope.openEncHeader(
           encHeader: base64Decode(dl.encHeaderB64),
-          fileKey: fileKey,
+          fileKey: suiteKeys.headerKey,
         );
         assertHeaderBindsBlobHash(
           headerBlobSha256Hex: header.blobSha256Hex,
@@ -892,7 +901,7 @@ class TransferService {
             ciphertextStream: ciphertextFile == null
                 ? Stream<List<int>>.value(ciphertextBytes!)
                 : ciphertextFile.openRead(),
-            key: fileKey,
+            key: suiteKeys.bodyKey,
             ciphertextTotalBytes: downloadedLength,
             onProgress: (done, total) =>
                 onProgress?.call(ReceivePhase.decrypting, done, total),

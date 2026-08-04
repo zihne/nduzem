@@ -40,11 +40,17 @@ Future<void> main() async {
         final k = key();
         final keys =
             SuiteKeys.derive(sodium, k, CryptoSuite.classicalSplitKeys);
-        expect(keys.headerKey, isNot(k),
-            reason: 'header key must not be K_file');
+        expect(
+          keys.headerKey,
+          isNot(k),
+          reason: 'header key must not be K_file',
+        );
         expect(keys.bodyKey, isNot(k), reason: 'body key must not be K_file');
-        expect(keys.headerKey, isNot(keys.bodyKey),
-            reason: 'the whole point is that these differ');
+        expect(
+          keys.headerKey,
+          isNot(keys.bodyKey),
+          reason: 'the whole point is that these differ',
+        );
         expect(keys.headerKey, hasLength(sodium.crypto.secretBox.keyBytes));
         expect(keys.bodyKey, hasLength(sodium.crypto.secretStream.keyBytes));
       });
@@ -75,7 +81,9 @@ Future<void> main() async {
             SuiteKeys.derive(sodium, key(), CryptoSuite.classicalSplitKeys);
         final plain = Uint8List.fromList(
           List<int>.generate(
-              FileCrypto.plaintextChunkBytes + 1234, (i) => (i * 13) & 0xff),
+            FileCrypto.plaintextChunkBytes + 1234,
+            (i) => (i * 13) & 0xff,
+          ),
         );
         final ct = await fc.encryptFile(plaintext: plain, key: keys.bodyKey);
         final back =
