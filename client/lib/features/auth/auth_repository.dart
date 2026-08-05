@@ -71,7 +71,6 @@ class AuthRepository implements TokenSource {
       final userId = await _storage.read(SecureStore.kUserId);
       final access = await _storage.read(SecureStore.kAccessToken);
       final refresh = await _storage.read(SecureStore.kRefreshToken);
-      final fp = await _storage.read(SecureStore.kFingerprint);
       final mfa = await _storage.read(SecureStore.kMfaEnabled);
       final email = await _storage.read(SecureStore.kEmail);
       final handle = await _storage.read(SecureStore.kHandle);
@@ -82,7 +81,7 @@ class AuthRepository implements TokenSource {
         userId: userId,
         email: email,
         handle: handle,
-        fingerprint: fp ?? '',
+        fingerprint: await _deriveFingerprint(userId),
         // Legacy sessions from before M2.5 won't have the key set —
         // default to false; the next successful login/enrol updates it.
         mfaEnabled: mfa == 'true',
@@ -161,6 +160,46 @@ class AuthRepository implements TokenSource {
       emailVerified: me.emailVerified,
       erasedAt: me.erasedAt,
     );
+  }
+
+  /// Derive this user's fingerprint from their stored public keys.
+  ///
+  /// The fingerprint used to be read from `kFingerprint`, a value cached
+  /// at register time. Two bugs followed from caching a derived value:
+  ///
+  /// 1. **It went stale.** Widening the safety number from 60 bits
+  ///    (ADR-0016 era) changed what `fingerprintOf` returns, but a cached
+  ///    string cannot change. Existing users saw the OLD fingerprint on
+  ///    the home screen while `send_screen` and `verify_contact_screen`
+  ///    computed the NEW one — so a user reading their own number aloud
+  ///    for out-of-band verification gave the recipient a value that
+  ///    could never match the lookup. That defeats the only defence
+  ///    against a server substituting keys.
+  ///
+  /// 2. **It was single-slot while keypairs are per-user (ADR-0011).**
+  ///    On a device hosting two accounts, the displayed fingerprint
+  ///    belonged to whichever registered last.
+  ///
+  /// Deriving on read makes both impossible: it is a pure function of
+  /// the two public keys, so it cannot disagree with what the send path
+  /// computes and cannot belong to a different account.
+  ///
+  /// Returns '' when the keypair isn't on this device — a fresh install
+  /// that logged in rather than registered. The UI already renders an
+  /// empty fingerprint as "not available", which is honest: without the
+  /// keys there is nothing to verify.
+  Future<String> _deriveFingerprint(String userId) async {
+    final identityPub = await _storage.readBytes(
+      SecureStore.identityPublicKeyFor(userId),
+    );
+    final signingPub = await _storage.readBytes(
+      SecureStore.signingPublicKeyFor(userId),
+    );
+    if (identityPub == null || signingPub == null) return '';
+    return fingerprintOf(
+      identityPublic: identityPub,
+      signingPublic: signingPub,
+    ).canonical;
   }
 
   // --- register ------------------------------------------------------------
@@ -280,9 +319,12 @@ class AuthRepository implements TokenSource {
 
   /// Common tail for both password-only and TOTP logins: persist the
   /// tokens, decode the user id out of the access JWT's `sub` claim, save
-  /// it, and build an [AuthSession] using whatever fingerprint is already
-  /// on-device (from a prior register on this device). Fingerprint stays
-  /// empty on a fresh install — that's a multi-device concern for M2+.
+  /// it, and build an [AuthSession].
+  ///
+  /// The fingerprint is DERIVED from this user's stored public keys, not
+  /// read back from a cache — see [_deriveFingerprint]. It stays empty on
+  /// a fresh install that logged in rather than registered, because the
+  /// keypair isn't on this device to derive from.
   Future<AuthSession> _acceptTokens({
     required String access,
     required String refresh,
@@ -292,14 +334,13 @@ class AuthRepository implements TokenSource {
     final userId = extractSubject(access);
     await _storage.write(SecureStore.kUserId, userId);
     await _writeMfaEnabled(mfaEnabled);
-    final fp = await _storage.read(SecureStore.kFingerprint) ?? '';
     final email = await _storage.read(SecureStore.kEmail);
     final handle = await _storage.read(SecureStore.kHandle);
     return AuthSession(
       userId: userId,
       email: email,
       handle: handle,
-      fingerprint: fp,
+      fingerprint: await _deriveFingerprint(userId),
       mfaEnabled: mfaEnabled,
     );
   }
@@ -430,6 +471,12 @@ class AuthRepository implements TokenSource {
     await _storage.write(SecureStore.kUserId, userId);
     await _storage.write(SecureStore.kAccessToken, access);
     await _storage.write(SecureStore.kRefreshToken, refresh);
+    // Still written for older builds and any external reader that
+    // expects the key, but NOTHING reads it back as the source of truth
+    // any more — it is derived on every session build. Leaving a cached
+    // copy in place that could disagree with the derived value is the
+    // bug this replaced, so treat this write as legacy and do not
+    // reintroduce a read of it. `wipe()` still clears it.
     await _storage.write(SecureStore.kFingerprint, fingerprint);
   }
 
@@ -532,4 +579,3 @@ final class LoginOutcomeMfaRequired extends LoginOutcome {
   const LoginOutcomeMfaRequired(this.mfaSession);
   final String mfaSession;
 }
-
