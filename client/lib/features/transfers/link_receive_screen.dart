@@ -376,7 +376,13 @@ class _LinkReceiveScreenState extends ConsumerState<LinkReceiveScreen> {
     });
     try {
       final svc = await ref.read(transferServiceProvider.future);
-      await svc.linkAck(widget.transferId);
+      // Same secret the download used. The server now requires it on
+      // ack for password-protected links, because acking is a state
+      // change that can trigger the burn.
+      await svc.linkAck(
+        widget.transferId,
+        password: _password.text.isEmpty ? null : _password.text,
+      );
       final path = _decrypted?.plaintextPath;
       if (path != null) await _deleteIfExists(path);
       final decrypted = _decrypted;
