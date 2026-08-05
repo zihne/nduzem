@@ -797,7 +797,8 @@ class TransferService {
 
   /// POST /v1/links/{id}/ack — link-mode counterpart to [ack]. Same
   /// idempotent semantics as the authed path.
-  Future<String> linkAck(String transferId) => _links.ack(transferId);
+  Future<String> linkAck(String transferId, {String? password}) =>
+      _links.ack(transferId, password: password);
 
   /// Link-mode streaming receive. Mirrors [receive] step-for-step
   /// except:

@@ -58,8 +58,15 @@ class LinksApi {
   /// `max_downloads > 1` links this is informational until the cap
   /// is hit; for the default `max_downloads == 1` it fires the
   /// burn immediately.
-  Future<String> ack(String transferId) async {
-    final body = await _client.post('/v1/links/$transferId/ack');
+  /// `password` is required for password-protected links: acking is a
+  /// state change (it can flip the transfer to DELETED and trigger the
+  /// burn), so the server now demands the same secret as `/download`.
+  /// Null for unprotected links, which still ack with an empty body.
+  Future<String> ack(String transferId, {String? password}) async {
+    final body = await _client.post(
+      '/v1/links/$transferId/ack',
+      body: password == null ? null : {'link_password': password},
+    );
     return body['status'] as String;
   }
 }
