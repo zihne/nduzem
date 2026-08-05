@@ -6,6 +6,7 @@ import 'package:mocktail/mocktail.dart';
 
 import 'package:opaqueshare/api/auth_api.dart';
 import 'package:opaqueshare/api/users_api.dart';
+import 'package:opaqueshare/crypto/fingerprint.dart';
 import 'package:opaqueshare/crypto/keys.dart';
 import 'package:opaqueshare/features/auth/auth_repository.dart';
 import 'package:opaqueshare/storage/secure_storage.dart';
@@ -51,6 +52,98 @@ void main() {
     when(() => store.purgeAll()).thenAnswer((_) async {});
     when(() => store.migrateLegacyKeypairIfNeeded()).thenAnswer((_) async {});
     when(() => store.read(any())).thenAnswer((_) async => null);
+    // Default: no keypair on this device. The fingerprint is DERIVED
+    // from the stored public keys on every session build, so tests that
+    // care about its value stub these two keys explicitly.
+    when(() => store.readBytes(any())).thenAnswer((_) async => null);
+  });
+
+  group('fingerprint is derived, never read from cache', () {
+    // The bug: `kFingerprint` cached the value computed at register
+    // time. Widening the safety number changed what `fingerprintOf`
+    // returns, but a cached string cannot change — so existing users saw
+    // the OLD number on the home screen while the send and verify
+    // screens computed the NEW one. A user reading their own fingerprint
+    // aloud for out-of-band verification gave the recipient a value that
+    // could never match the lookup, which defeats the only defence
+    // against a server substituting keys.
+    const staleCached = '0000000583409474571453372'; // the 60-bit form
+
+    void stubKeysOnDevice(String userId) {
+      when(() => store.readBytes(SecureStore.identityPublicKeyFor(userId)))
+          .thenAnswer((_) async => identityPub);
+      when(() => store.readBytes(SecureStore.signingPublicKeyFor(userId)))
+          .thenAnswer((_) async => signingPub);
+    }
+
+    test('restoreSession ignores a stale cached value', () async {
+      when(() => store.read(SecureStore.kUserId))
+          .thenAnswer((_) async => 'u-1');
+      when(() => store.read(SecureStore.kAccessToken))
+          .thenAnswer((_) async => 'access');
+      when(() => store.read(SecureStore.kRefreshToken))
+          .thenAnswer((_) async => 'refresh');
+      when(() => store.read(SecureStore.kFingerprint))
+          .thenAnswer((_) async => staleCached);
+      stubKeysOnDevice('u-1');
+
+      final session = await repo.restoreSession();
+
+      expect(session, isNotNull);
+      expect(
+        session!.fingerprint,
+        isNot(staleCached),
+        reason: 'the cached value must not win over the derived one',
+      );
+      expect(
+        session.fingerprint,
+        fingerprintOf(identityPublic: identityPub, signingPublic: signingPub)
+            .canonical,
+        reason: 'must equal what the send path computes from the same keys',
+      );
+    });
+
+    test('what the home screen shows equals what a lookup would match',
+        () async {
+      // The whole point of the fingerprint: the value the user reads
+      // aloud has to be the value the counterparty sees.
+      when(() => store.read(SecureStore.kUserId))
+          .thenAnswer((_) async => 'u-1');
+      when(() => store.read(SecureStore.kAccessToken))
+          .thenAnswer((_) async => 'access');
+      when(() => store.read(SecureStore.kRefreshToken))
+          .thenAnswer((_) async => 'refresh');
+      stubKeysOnDevice('u-1');
+
+      final session = await repo.restoreSession();
+      final asCounterpartyComputesIt = fingerprintOf(
+        identityPublic: identityPub,
+        signingPublic: signingPub,
+      );
+      expect(
+        Fingerprint(session!.fingerprint).matches(
+          asCounterpartyComputesIt.display,
+        ),
+        isTrue,
+      );
+    });
+
+    test('an empty fingerprint when the keypair is not on this device',
+        () async {
+      // Fresh install that logged in rather than registered. Showing
+      // nothing is honest — without the keys there is nothing to verify.
+      when(() => store.read(SecureStore.kUserId))
+          .thenAnswer((_) async => 'u-1');
+      when(() => store.read(SecureStore.kAccessToken))
+          .thenAnswer((_) async => 'access');
+      when(() => store.read(SecureStore.kRefreshToken))
+          .thenAnswer((_) async => 'refresh');
+      when(() => store.read(SecureStore.kFingerprint))
+          .thenAnswer((_) async => staleCached);
+
+      final session = await repo.restoreSession();
+      expect(session!.fingerprint, isEmpty);
+    });
   });
 
   IdentityKeypair buildPair() => IdentityKeypair(
@@ -141,8 +234,7 @@ void main() {
       // The M2.x wiring reads the email back from storage inside
       // _acceptTokens to build the session. Ensure the read returns the
       // value we just wrote.
-      when(() => store.read(SecureStore.kEmail))
-          .thenAnswer((_) async => 'x@y');
+      when(() => store.read(SecureStore.kEmail)).thenAnswer((_) async => 'x@y');
 
       final outcome = await repo.login(email: 'x@y', password: 'p');
 
@@ -317,8 +409,7 @@ void main() {
       when(() => store.read(SecureStore.kUserId)).thenThrow(
         PlatformException(
           code: 'Exception encountered, read',
-          message:
-              'javax.crypto.BadPaddingException: error:1e000065:Cipher '
+          message: 'javax.crypto.BadPaddingException: error:1e000065:Cipher '
               'functions:OPENSSL_internal:BAD_DECRYPT',
         ),
       );
@@ -386,8 +477,7 @@ void main() {
       verifyNever(() => store.resetOnCorruption());
     });
 
-    test('non-decrypt PlatformException propagates (no silent wipe)',
-        () async {
+    test('non-decrypt PlatformException propagates (no silent wipe)', () async {
       // Guardrail: we don't want to silently wipe a healthy session
       // when an unrelated platform error occurs (e.g., a keystore
       // hiccup before device is unlocked for the first time). Only
