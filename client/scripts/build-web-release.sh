@@ -131,7 +131,26 @@ ok "tests pass"
 say "Building release web bundle with:"
 say "  API base:   $API_BASE"
 say "  Share URL:  $SHARE_URL_BASE"
+# --no-web-resources-cdn is NOT optional here.
+#
+# By default Flutter loads CanvasKit from www.gstatic.com and the Roboto
+# font from fonts.gstatic.com AT RUNTIME. For this product that is three
+# problems at once: third-party JavaScript with full DOM access on the
+# origin that holds the user's identity private key; an IP + timing leak
+# to Google on every app load, from a tool sold on not leaking; and a
+# runtime dependency that makes the shipped app not self-contained,
+# which undercuts the reproducible-build claim in spec §13.1.
+#
+# The bundle already ships a local canvaskit/ directory — it was simply
+# going unused. This flag makes the app load it, and with it the app
+# issues zero off-origin requests.
+#
+# The deployed Content-Security-Policy (infra/docker/Caddyfile, app.
+# vhost) has no CDN origin in `script-src`/`connect-src`, so dropping
+# this flag does not quietly reintroduce the dependency — it breaks the
+# app at load time, visibly, on the next deploy.
 flutter build web --release \
+    --no-web-resources-cdn \
     --dart-define=OPAQUESHARE_API_BASE="$API_BASE" \
     --dart-define=OPAQUESHARE_SHARE_URL_BASE="$SHARE_URL_BASE"
 
@@ -140,6 +159,22 @@ if [[ ! -f "$BUNDLE_DIR/index.html" ]]; then
     fail "build produced no bundle at $BUNDLE_DIR (missing index.html)"
 fi
 ok "bundle produced"
+
+# --- 6b. Refuse a bundle that phones home ----------------------------
+#
+# The CDN dependency is invisible in the output of a successful build,
+# so verify it rather than trusting the flag above survived an edit.
+# `useLocalCanvasKit` is what the Flutter loader actually branches on;
+# the gstatic URL remains in the bundle as the unused else-branch, so
+# grepping for the URL alone would false-positive forever.
+if ! grep -q 'useLocalCanvasKit"*:*"*true' "$BUNDLE_DIR/flutter_bootstrap.js" 2>/dev/null; then
+    fail "bundle is configured to load CanvasKit from www.gstatic.com.
+       The --no-web-resources-cdn flag did not take effect. Shipping
+       this would put third-party JavaScript on the origin that holds
+       users' identity private keys, and the deployed CSP would block
+       the app on arrival."
+fi
+ok "self-contained (CanvasKit served locally, no CDN at runtime)"
 
 # --- 7. Summary + next steps -----------------------------------------
 BUNDLE_SIZE=$(du -sh "$BUNDLE_DIR" | cut -f1)
