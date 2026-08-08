@@ -43,12 +43,21 @@ void main() {
     final sameBrowser = find.textContaining('same browser');
 
     if (kIsWeb) {
-      expect(neverLeaves, findsOneWidget,
-          reason: 'web users must be told the key is browser-local');
-      expect(cannotRestore, findsWidgets,
-          reason: 'web users must be told it cannot be restored');
-      expect(sameBrowser, findsOneWidget,
-          reason: 'web users must be told to return to this browser');
+      expect(
+        neverLeaves,
+        findsOneWidget,
+        reason: 'web users must be told the key is browser-local',
+      );
+      expect(
+        cannotRestore,
+        findsWidgets,
+        reason: 'web users must be told it cannot be restored',
+      );
+      expect(
+        sameBrowser,
+        findsOneWidget,
+        reason: 'web users must be told to return to this browser',
+      );
     } else {
       // Native keeps the keypair in the Keychain /
       // EncryptedSharedPreferences, which the OS does not evict on an
