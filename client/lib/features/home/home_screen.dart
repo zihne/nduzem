@@ -223,14 +223,22 @@ class _FingerprintCard extends StatelessWidget {
                         'device where you registered to view it)',
                 style: const TextStyle(fontStyle: FontStyle.italic),
               ),
-            // Offered ONLY when the key is absent. This is the screen
-            // someone in that state needs, and surfacing it here means
-            // they find it where they hit the problem rather than
-            // hunting through settings.
+            // Prominent when the key is ABSENT — this is the only way
+            // forward from that state, and surfacing it here means they
+            // find it where they hit the problem.
             //
-            // Deliberately not offered when a key IS present: rotation
-            // permanently orphans everything already sent, so it should
-            // not sit one tap away from a working account.
+            // A quieter version appears at the end of the `else` branch
+            // below, so rotation can also be INITIATED with a working
+            // key. An earlier version omitted that on the reasoning that
+            // rotation permanently orphans everything already sent and
+            // should not sit one tap from a healthy account. That was
+            // wrong: it removed the capability rather than gating it,
+            // and removed it exactly where it matters most — suspected
+            // key compromise (a stolen laptop, a device someone else
+            // used) is a legitimate reason to rotate, and the key still
+            // works fine in that case. The guardrails belong on the
+            // destination screen, where they are: password, second
+            // factor, and an explicit acknowledgement of the loss.
             if (fp == null) ...[
               const SizedBox(height: 12),
               OutlinedButton.icon(
@@ -287,6 +295,23 @@ class _FingerprintCard extends StatelessWidget {
                     label: const Text('Show QR'),
                   ),
                 ],
+              ),
+              // Low prominence deliberately: a plain text button, not an
+              // outlined one, so it reads as available-if-needed rather
+              // than a suggested action.
+              const SizedBox(height: 4),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: () => context.push('/rotate-key'),
+                  icon: const Icon(Icons.key_outlined, size: 18),
+                  label: const Text('Replace my key…'),
+                ),
+              ),
+              Text(
+                'If you think someone else has had access to this device. '
+                'Files already sent to you will stop opening.',
+                style: Theme.of(context).textTheme.bodySmall,
               ),
             ],
           ],
