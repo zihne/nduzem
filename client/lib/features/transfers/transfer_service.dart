@@ -551,13 +551,30 @@ class TransferService {
           SecureStore.identityPublicKeyFor(activeUserId),
         );
         if (identityPriv == null || identityPub == null) {
+          // Same symptom, two causes, and only one is recoverable — so
+          // the message must not assume the optimistic one. On native
+          // the keypair is sitting in another device's Keychain. On web
+          // it may be that, or it may be gone: browser storage is
+          // evictable, and WebKit clears all script-writable storage
+          // after seven days of Safari use without interaction on the
+          // site. Sending someone back to a browser that no longer holds
+          // the key wastes their time and hides the real outcome.
           throw StateError(
-            "This device doesn't have the identity keypair for this "
-            'account. The account was likely created on another device, or '
-            'an older app version overwrote the keys when a second account '
-            'was registered here. Sign in from the device where this '
-            'account was originally registered to decrypt received '
-            'transfers.',
+            kIsWeb
+                ? 'This browser does not have the identity key for this '
+                    'account, so this transfer cannot be decrypted here. '
+                    'Keys are held by the browser you registered with and '
+                    'are not shared between browsers or computers — open '
+                    'OpaqueShare in that browser to receive this file. If '
+                    'you registered in this browser, its storage may have '
+                    'been cleared, in which case the key cannot be '
+                    'recovered and this transfer cannot be opened.'
+                : "This device doesn't have the identity keypair for this "
+                    'account. The account was likely created on another '
+                    'device, or an older app version overwrote the keys '
+                    'when a second account was registered here. Sign in '
+                    'from the device where this account was originally '
+                    'registered to decrypt received transfers.',
           );
         }
         final fileKey = _sealedBox.sealOpen(

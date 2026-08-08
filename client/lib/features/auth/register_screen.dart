@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -99,6 +100,44 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                   labelText: 'Handle (optional)',
                 ),
               ),
+              // Web only, and shown BEFORE the button rather than after
+              // registering. Your identity key is generated here and
+              // kept by this browser — it is never sent to the server,
+              // which is the property the whole product rests on, and
+              // also means nobody can restore it for you. Browsers treat
+              // that storage as disposable, so this is a real constraint
+              // rather than a disclaimer, and someone choosing a browser
+              // to register in deserves to know before they choose.
+              if (kIsWeb) ...[
+                const SizedBox(height: 20),
+                Card(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(Icons.key_outlined, size: 20),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'Your encryption key is created in this browser '
+                            'and never leaves it. That is what stops us from '
+                            'reading your files — and it means we cannot '
+                            'restore it for you.\n\n'
+                            'Sign in from this same browser to open files '
+                            'sent to you. Clearing site data, or not '
+                            'visiting for a long time, can erase the key '
+                            'permanently. For everyday use, the mobile app '
+                            'keeps it in your device keychain instead.',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
               const SizedBox(height: 24),
               FilledButton(
                 onPressed: _busy ? null : _submit,
