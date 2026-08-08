@@ -32,6 +32,55 @@ class UsersApi {
     );
   }
 
+  /// `POST /v1/users/me/identity-key` — publish a NEW identity + signing
+  /// keypair (server ADR-0017).
+  ///
+  /// Only the PUBLIC halves travel. The caller generates the pair
+  /// locally and persists the private halves itself; this method has no
+  /// way to recover anything and does not pretend to.
+  ///
+  /// `password`, and `mfaCode` when the account has MFA enabled, are
+  /// re-authentication — not encryption inputs. Rotation redirects every
+  /// FUTURE transfer to the new key, which is precisely what an attacker
+  /// holding a stolen session would want, so the server refuses on a
+  /// token alone.
+  ///
+  /// `mfaIsRecoveryCode` matters more than it looks: the ordinary reason
+  /// to rotate is a lost device, which takes the TOTP authenticator with
+  /// it. Without this path the second factor would block the recovery it
+  /// exists to protect.
+  Future<IdentityKeyRotation> rotateIdentityKey({
+    required String password,
+    required String identityPublicB64,
+    required String signingPublicB64,
+    String? mfaCode,
+    bool mfaIsRecoveryCode = false,
+  }) async {
+    final body = await _client.post(
+      '/v1/users/me/identity-key',
+      body: <String, dynamic>{
+        'password': password,
+        'identity_pub': identityPublicB64,
+        'signing_pub': signingPublicB64,
+        // The server refuses without this. Sent as a constant rather
+        // than a parameter because the UI shows the consequence before
+        // it ever calls here — making it optional would let a future
+        // caller skip the warning and keep the acknowledgement.
+        'acknowledge_pending_unreadable': true,
+        if (mfaCode != null) 'mfa_code': mfaCode,
+        if (mfaCode != null) 'mfa_is_recovery_code': mfaIsRecoveryCode,
+      },
+      authed: true,
+    );
+    return IdentityKeyRotation(
+      keyFingerprint: body['key_fingerprint'] as String,
+      previousKeyFingerprint: body['previous_key_fingerprint'] as String,
+      rotatedAt: DateTime.parse(body['rotated_at'] as String),
+      pendingTransfersUnreadable:
+          (body['pending_transfers_unreadable'] as num?)?.toInt() ?? 0,
+    );
+  }
+
   /// Look up a user by email OR handle (exactly one of the two).
   ///
   /// POST-with-body (not GET-with-query) so the email / handle value
@@ -111,4 +160,27 @@ class UserLookup {
   /// mismatch signals server misbehaviour (bug, tampering, or algorithm
   /// drift) and MUST NOT be silently accepted.
   final String serverKeyFingerprint;
+}
+
+
+/// Outcome of a successful identity-key rotation.
+class IdentityKeyRotation {
+  const IdentityKeyRotation({
+    required this.keyFingerprint,
+    required this.previousKeyFingerprint,
+    required this.rotatedAt,
+    required this.pendingTransfersUnreadable,
+  });
+
+  /// The NEW fingerprint, as the server computed it. Worth showing back
+  /// to the user: it is what their contacts will see, and the value the
+  /// notification email quotes.
+  final String keyFingerprint;
+  final String previousKeyFingerprint;
+  final DateTime rotatedAt;
+
+  /// Transfers that were waiting and are now permanently undecryptable.
+  /// Usually zero-cost — the caller is rotating because the old key is
+  /// already gone — but reported honestly rather than hidden.
+  final int pendingTransfersUnreadable;
 }

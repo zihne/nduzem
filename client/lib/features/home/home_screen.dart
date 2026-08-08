@@ -222,7 +222,29 @@ class _FingerprintCard extends StatelessWidget {
                     : '(not available on this device — sign in on the '
                         'device where you registered to view it)',
                 style: const TextStyle(fontStyle: FontStyle.italic),
-              )
+              ),
+            // Offered ONLY when the key is absent. This is the screen
+            // someone in that state needs, and surfacing it here means
+            // they find it where they hit the problem rather than
+            // hunting through settings.
+            //
+            // Deliberately not offered when a key IS present: rotation
+            // permanently orphans everything already sent, so it should
+            // not sit one tap away from a working account.
+            if (fp == null) ...[
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: () => context.push('/rotate-key'),
+                icon: const Icon(Icons.key_outlined),
+                label: const Text('Replace my key'),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                "Only if it's gone for good. This lets people send to you "
+                'again; it cannot open files already sent.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ]
             else ...[
               SelectableText(
                 fp.display,

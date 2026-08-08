@@ -436,6 +436,71 @@ class AuthRepository implements TokenSource {
     }
   }
 
+  // --- identity key rotation -----------------------------------------------
+
+  /// Generate a fresh identity + signing keypair and publish it
+  /// (server ADR-0017, client ADR-0017).
+  ///
+  /// **Ordering is the whole design here.** The new private keys are
+  /// written to secure storage BEFORE the server is told about the new
+  /// public keys. Publish-then-persist has a window where the directory
+  /// advertises a key this device cannot use — senders would seal to it
+  /// immediately and the user would be worse off than before rotating,
+  /// which is a cruel outcome for an operation whose entire purpose is
+  /// recovering from key loss.
+  ///
+  /// Persist-then-publish inverts the failure into a harmless one: local
+  /// keys the server has not heard of yet. Nothing seals to them, and
+  /// retrying the call fixes it.
+  ///
+  /// The old private keys are deliberately NOT deleted. If any remain,
+  /// they are the only thing that can still open transfers already
+  /// sealed to them, and rotation is not a reason to destroy readable
+  /// mail. They are simply superseded.
+  Future<IdentityKeyRotation> rotateIdentityKey({
+    required String password,
+    String? mfaCode,
+    bool mfaIsRecoveryCode = false,
+  }) async {
+    final userId = await _storage.read(SecureStore.kUserId);
+    if (userId == null) {
+      throw StateError('Not signed in.');
+    }
+
+    final pair = _keys.generate();
+    final fp = fingerprintOf(
+      identityPublic: pair.identityPublic,
+      signingPublic: pair.signingPublic,
+    );
+
+    await _persistKeypair(userId: userId, pair: pair);
+
+    final result = await _usersApi.rotateIdentityKey(
+      password: password,
+      identityPublicB64: pair.identityPublicB64,
+      signingPublicB64: pair.signingPublicB64,
+      mfaCode: mfaCode,
+      mfaIsRecoveryCode: mfaIsRecoveryCode,
+    );
+
+    // Cross-check rather than trust the echo. The server independently
+    // derives the fingerprint from the keys it stored; if its answer
+    // differs from ours, either it stored something other than what we
+    // sent or the two derivations have drifted. Both are exactly the
+    // condition out-of-band verification exists to catch, so surface it
+    // instead of displaying a number our contacts will not see.
+    if (result.keyFingerprint.replaceAll(' ', '') != fp.canonical) {
+      throw StateError(
+        'The server reported a different fingerprint (${result.keyFingerprint}) '
+        'than this device computed (${fp.display}). The key was not stored as '
+        'sent — do not share either value.',
+      );
+    }
+
+    await _storage.write(SecureStore.kFingerprint, fp.canonical);
+    return result;
+  }
+
   // --- internals -----------------------------------------------------------
 
   /// ADR-0011: keypair material is namespaced by `userId` so two
