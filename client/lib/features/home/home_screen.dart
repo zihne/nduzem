@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -189,10 +190,38 @@ class _FingerprintCard extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             if (fp == null)
-              const Text(
-                '(not available on this device — sign in on the device '
-                'where you registered to view it)',
-                style: TextStyle(fontStyle: FontStyle.italic),
+              // The advice has to differ by platform, because the same
+              // symptom has two different causes and only one of them is
+              // recoverable.
+              //
+              // Native: the keypair is in the Keychain /
+              // EncryptedSharedPreferences of whichever device
+              // registered. It still exists there. "Go to that device"
+              // is correct and actionable.
+              //
+              // Web: it may also simply be GONE. Browser storage is
+              // evictable — WebKit deletes all script-writable storage
+              // after seven days of Safari use without interaction, and
+              // clearing site data does the same instantly. Telling
+              // someone to return to a browser that no longer holds
+              // anything sends them looking for something that is not
+              // there. Say both, honestly, rather than imply the loss
+              // is always recoverable.
+              Text(
+                kIsWeb
+                    ? '(not available in this browser)\n\n'
+                        'Your key is stored by the browser you registered '
+                        'with, and is not shared between browsers or '
+                        'computers. Open OpaqueShare in that browser to '
+                        'see your fingerprint and to open files sent to '
+                        'you.\n\n'
+                        'If you registered here and it has disappeared, '
+                        'the browser may have cleared its storage. Keys '
+                        'cannot be recovered, and files already sent to '
+                        'you cannot be opened without them.'
+                    : '(not available on this device — sign in on the '
+                        'device where you registered to view it)',
+                style: const TextStyle(fontStyle: FontStyle.italic),
               )
             else ...[
               SelectableText(

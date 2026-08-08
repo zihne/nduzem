@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'app.dart';
 import 'crypto/temp_sweeper.dart';
+import 'storage/persistent_storage.dart';
 
 /// OpaqueShare Flutter client.
 ///
@@ -33,6 +34,20 @@ void main() {
           // unreadable cache directory is not a reason to fail to launch.
           .catchError((Object _) => 0),
     );
+  } else {
+    // Ask the browser not to evict this origin's storage. On web the
+    // identity private key lives in browser storage, and WebKit deletes
+    // all script-writable storage after seven days of Safari use with no
+    // interaction on the site — which for an occasional-use tool is the
+    // normal case. Losing it is not a lost session: there is no key
+    // rotation endpoint, so the account survives and can never decrypt
+    // again.
+    //
+    // Best-effort by design: `persist()` is a request the browser may
+    // refuse, and it does nothing about cleared data or a second
+    // browser. Not awaited — it must not delay the first frame, and
+    // nothing on screen depends on the answer.
+    unawaited(requestPersistentStorage());
   }
   runApp(const ProviderScope(child: OpaqueShareApp()));
 }

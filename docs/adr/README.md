@@ -37,3 +37,4 @@ Status conventions:
 | [0014](0014-defer-crypto-metadata-to-commit.md) | Defer per-transfer crypto metadata from `/initiate` to `/commit` (amends ADR-0013) | Accepted |
 | [0015](0015-ios-platform-parity.md) | iOS platform parity: Info.plist, entitlements, universal links | Accepted |
 | [0016](0016-sodium-libs-discontinued.md) | `sodium_libs` discontinued: stay on 3.x, migrate to `sodium` v4 when native assets are stable | Accepted |
+| [0017](0017-identity-key-durability.md) | Identity key durability: recovery key over password escrow; `storage.persist()` + honest messaging shipped now | Accepted |
