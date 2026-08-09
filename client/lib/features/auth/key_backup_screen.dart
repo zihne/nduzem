@@ -48,6 +48,10 @@ class _KeyBackupScreenState extends ConsumerState<KeyBackupScreen> {
     try {
       final repo = await ref.read(authRepositoryProvider.future);
       final key = await repo.createKeyBackup(password: _password.text);
+      // The home screen decides between "not backed up" and "backed up"
+      // from this provider; leaving it stale would show the prompt
+      // again immediately after the user acted on it.
+      ref.invalidate(keyBackupStatusProvider);
       if (mounted) setState(() => _created = key);
     } on ApiException catch (exc) {
       setState(() => _error = exc.message);
@@ -73,16 +77,39 @@ class _KeyBackupScreenState extends ConsumerState<KeyBackupScreen> {
 
   Widget _explainAndConfirm() {
     final theme = Theme.of(context);
+    // A backup already exists when the user came here from "Create a
+    // new backup…", which is the lost-recovery-key path. Saying so
+    // matters: the old key stops working, and someone who still had it
+    // filed away would otherwise keep a key that silently no longer
+    // opens anything.
+    final replacing =
+        ref.watch(keyBackupStatusProvider).valueOrNull?.exists ?? false;
     return Form(
       key: _form,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
-            'Why this matters',
+            replacing ? 'Replacing your backup' : 'Why this matters',
             style: theme.textTheme.titleMedium,
           ),
           const SizedBox(height: 8),
+          if (replacing) ...[
+            Card(
+              color: theme.colorScheme.errorContainer,
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text(
+                  'You already have a backup. Creating a new one gives you '
+                  'a new recovery key and stops the old one from working. '
+                  'Do this if you have lost the old key — not if you still '
+                  'have it.',
+                  style: theme.textTheme.bodySmall,
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
           Text(
             'Your encryption key lives only on your devices. If you lose '
             'them all — a phone replaced, a browser cleared — files sent '
@@ -144,7 +171,7 @@ class _KeyBackupScreenState extends ConsumerState<KeyBackupScreen> {
                     width: 20,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
-                : const Text('Create backup'),
+                : Text(replacing ? 'Replace backup' : 'Create backup'),
           ),
           if (_error != null) ...[
             const SizedBox(height: 12),

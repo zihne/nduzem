@@ -342,6 +342,41 @@ class _FingerprintCard extends StatelessWidget {
                 'Files already sent to you will stop opening.',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
+              // A PERMANENT entry point, shown once a backup exists.
+              //
+              // The prompt below only appears when there is none, so
+              // without this there was no route at all after the first
+              // backup — including for the case that most needs one:
+              // losing the recovery key while still holding the device.
+              // That is entirely recoverable (make a new backup, get a
+              // new key), and it had no button.
+              if (backedUp != null && backedUp!.exists) ...[
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Icon(
+                      Icons.shield_outlined,
+                      size: 18,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                    const SizedBox(width: 8),
+                    const Expanded(child: Text('Your key is backed up')),
+                  ],
+                ),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: () => context.push('/key-backup'),
+                    icon: const Icon(Icons.backup_outlined, size: 18),
+                    label: const Text('Create a new backup…'),
+                  ),
+                ),
+                Text(
+                  "If you've lost your recovery key, make a new backup to "
+                  'get a new one. The old key stops working.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
               // The prompt that prevents the problem rather than
               // recovering from it. Only when we positively know there
               // is no backup — see `backedUp`.

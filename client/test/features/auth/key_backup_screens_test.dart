@@ -145,6 +145,47 @@ void main() {
       expect(find.textContaining('not backed up'), findsNothing);
     });
 
+    testWidgets('a permanent route exists once a backup is in place',
+        (tester) async {
+      // Without this there was no entry point at all after the first
+      // backup — including for the case that most needs one: losing the
+      // recovery key while still holding the device. That is entirely
+      // recoverable by making a new backup, and it had no button.
+      final rec = _Recorder();
+      await pump(
+        tester,
+        _home(
+          rec,
+          fingerprint: '1' * 25,
+          backup: const KeyBackupStatus(exists: true),
+        ),
+      );
+      expect(find.textContaining('Your key is backed up'), findsOneWidget);
+
+      final again = find.widgetWithText(TextButton, 'Create a new backup…');
+      expect(again, findsOneWidget, reason: 'no way to replace a backup');
+      await tester.ensureVisible(again);
+      await tester.tap(again);
+      await tester.pumpAndSettle();
+      expect(rec.pushed, ['/key-backup']);
+    });
+
+    testWidgets('and it warns that the old recovery key stops working',
+        (tester) async {
+      // Someone who still has the old key filed away would otherwise
+      // keep a key that silently no longer opens anything.
+      final rec = _Recorder();
+      await pump(
+        tester,
+        _home(
+          rec,
+          fingerprint: '1' * 25,
+          backup: const KeyBackupStatus(exists: true),
+        ),
+      );
+      expect(find.textContaining('old key stops working'), findsOneWidget);
+    });
+
     testWidgets('stays hidden when the status is unknown', (tester) async {
       // Null means the lookup failed, not that there is no backup.
       // Nagging someone who is already protected whenever the network
