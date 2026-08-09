@@ -195,8 +195,24 @@ class ApiClient {
   }) =>
       _send('POST', path, body: body, authed: authed);
 
-  Future<Map<String, dynamic>> delete(String path, {bool authed = false}) =>
-      _send('DELETE', path, body: null, authed: authed);
+  Future<Map<String, dynamic>> put(
+    String path, {
+    Map<String, dynamic>? body,
+    bool authed = false,
+  }) =>
+      _send('PUT', path, body: body, authed: authed);
+
+  /// DELETE takes an optional body because some destructive endpoints
+  /// re-authenticate. HTTP permits it and `http.Request` sends it; the
+  /// alternative — a password in the query string — would put it in
+  /// access logs, which is the mistake ADR-0022 already corrected once
+  /// for email lookups.
+  Future<Map<String, dynamic>> delete(
+    String path, {
+    Map<String, dynamic>? body,
+    bool authed = false,
+  }) =>
+      _send('DELETE', path, body: body, authed: authed);
 
   Future<Map<String, dynamic>> _send(
     String method,

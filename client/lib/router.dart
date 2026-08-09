@@ -7,6 +7,8 @@ import 'features/auth/login_screen.dart';
 import 'features/auth/password_reset_confirm_screen.dart';
 import 'features/auth/password_reset_request_screen.dart';
 import 'features/auth/register_screen.dart';
+import 'features/auth/key_backup_screen.dart';
+import 'features/auth/restore_key_screen.dart';
 import 'features/auth/rotate_key_screen.dart';
 import 'features/auth/totp_challenge_screen.dart';
 import 'features/auth/totp_enroll_screen.dart';
@@ -70,6 +72,14 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/rotate-key',
         builder: (_, __) => const RotateKeyScreen(),
+      ),
+      GoRoute(
+        path: '/key-backup',
+        builder: (_, __) => const KeyBackupScreen(),
+      ),
+      GoRoute(
+        path: '/restore-key',
+        builder: (_, __) => const RestoreKeyScreen(),
       ),
       GoRoute(
         path: '/login/totp',

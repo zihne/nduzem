@@ -81,6 +81,65 @@ class UsersApi {
     );
   }
 
+  /// `PUT /v1/users/me/key-backup` — store the encrypted keypair backup.
+  ///
+  /// `blobB64` is ciphertext produced locally under a recovery key that
+  /// never leaves the device. The server holds bytes it cannot open;
+  /// this method's only job is not to become curious about them.
+  ///
+  /// `password` is re-authentication, not an encryption input. A write
+  /// REPLACES whatever is stored, so a stolen session alone must not be
+  /// able to destroy someone's only route back from device loss — they
+  /// would gain nothing readable, and the user would not find out until
+  /// they needed it.
+  Future<KeyBackupStatus> putKeyBackup({
+    required String blobB64,
+    required String password,
+  }) async {
+    final body = await _client.put(
+      '/v1/users/me/key-backup',
+      body: <String, dynamic>{'blob': blobB64, 'password': password},
+      authed: true,
+    );
+    return KeyBackupStatus.fromJson(body);
+  }
+
+  /// `GET /v1/users/me/key-backup` — fetch the blob to unwrap locally.
+  ///
+  /// Returns null when no backup exists (the server answers 404), which
+  /// is an ordinary state rather than an error: most accounts will not
+  /// have one until they are prompted.
+  Future<String?> getKeyBackupBlob() async {
+    try {
+      final body = await _client.get('/v1/users/me/key-backup', authed: true);
+      return body['blob'] as String;
+    } on ApiException catch (exc) {
+      if (exc.statusCode == 404) return null;
+      rethrow;
+    }
+  }
+
+  /// `GET /v1/users/me/key-backup/status` — does one exist?
+  ///
+  /// Separate from the fetch so the app can decide whether to prompt
+  /// without pulling the user's encrypted key down on every load.
+  Future<KeyBackupStatus> keyBackupStatus() async {
+    final body =
+        await _client.get('/v1/users/me/key-backup/status', authed: true);
+    return KeyBackupStatus.fromJson(body);
+  }
+
+  /// `DELETE /v1/users/me/key-backup`. Password-gated for the same
+  /// reason as the write: it is destructive.
+  Future<KeyBackupStatus> deleteKeyBackup({required String password}) async {
+    final body = await _client.delete(
+      '/v1/users/me/key-backup',
+      body: <String, dynamic>{'password': password},
+      authed: true,
+    );
+    return KeyBackupStatus.fromJson(body);
+  }
+
   /// Look up a user by email OR handle (exactly one of the two).
   ///
   /// POST-with-body (not GET-with-query) so the email / handle value
@@ -183,4 +242,22 @@ class IdentityKeyRotation {
   /// Usually zero-cost — the caller is rotating because the old key is
   /// already gone — but reported honestly rather than hidden.
   final int pendingTransfersUnreadable;
+}
+
+
+/// Whether the account has an encrypted key backup, and when it was
+/// last written. Deliberately carries no fragment of the blob.
+class KeyBackupStatus {
+  const KeyBackupStatus({required this.exists, this.updatedAt});
+
+  final bool exists;
+  final DateTime? updatedAt;
+
+  factory KeyBackupStatus.fromJson(Map<String, dynamic> body) =>
+      KeyBackupStatus(
+        exists: body['exists'] as bool? ?? false,
+        updatedAt: body['updated_at'] == null
+            ? null
+            : DateTime.parse(body['updated_at'] as String),
+      );
 }

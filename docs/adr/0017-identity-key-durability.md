@@ -1,6 +1,6 @@
 # ADR-0017 — Identity key durability, and what we will not trade for it
 
-**Status:** Accepted (direction); mitigations shipped, recovery mechanism not yet built
+**Status:** Accepted and implemented
 **Date:** 2026-08-08
 
 ## Context
@@ -140,12 +140,109 @@ Cheap, zero-trade mitigations, ahead of the recovery mechanism:
   two branches are only reachable from `flutter test` and
   `flutter test --platform chrome` respectively.
 
+## What was built
+
+### Recovery key
+
+128 bits from the CSPRNG, rendered in Crockford base32 (no I, L, O or U)
+in groups of five: `XXXXX-XXXXX-XXXXX-XXXXX-XXXXXX`. Parsing accepts any
+case, any separators, and maps the substitutions people actually make
+back — this string exists to be copied by hand, and an alphabet
+containing both `O` and `0` would manufacture support tickets.
+
+The wrapping key is keyed BLAKE2b over a fixed domain-separation string.
+Not a password KDF: the input is already 128 bits of uniform CSPRNG
+output, so there is nothing for argon2 to stretch, and running one would
+cost seconds on a phone for no measurable gain.
+
+### Blob format
+
+`"OSRK" | version(1) | nonce(24) | crypto_secretbox(payload)`
+
+Magic and version so a wrong file fails with something that names the
+problem, rather than as an authentication failure indistinguishable from
+a mistyped key. The payload carries all four key halves plus the
+fingerprint at the time of backup.
+
+### Server
+
+`key_backups`, keyed on `user_id`, one row per account, replaced
+wholesale. Four endpoints under `/v1/users/me/key-backup`. The server
+never parses the blob and stores no verifier the recovery key could be
+tested against.
+
+- **PUT and DELETE require the password.** Both are destructive. An
+  attacker holding only a session gains nothing readable — the recovery
+  key never reaches us — but could replace a backup with garbage,
+  destroying the user's only route back from device loss, who would not
+  find out until they needed it.
+- **GET does not.** The blob is useless without the recovery key, and
+  password-gating it would break the case this exists for: a fresh
+  device where the point is that possession of the password is *not*
+  what unlocks the key.
+- **A separate `/status` endpoint** answers "does one exist" without
+  shipping the ciphertext, because the app asks on every load to decide
+  whether to prompt.
+- **`downgrade` refuses** while any backup exists. These rows may be the
+  only surviving copy of a user's identity key; dropping them silently
+  would inflict exactly the loss this prevents, on the users who took
+  the trouble to protect themselves.
+
+### Rotation invalidates the backup
+
+A backup taken before a key rotation still decrypts perfectly — and
+yields the keypair that was just replaced. Restoring from it succeeds at
+every visible step and then decrypts nothing.
+
+So rotation deletes it, and the response carries
+`key_backup_invalidated` so the client prompts for a fresh one rather
+than leaving the account unprotected while appearing backed up.
+
+### Restore checks against the published key
+
+Before writing anything, the restored keypair is compared against the
+public key the account currently publishes via `POST /v1/users/lookup` —
+what a sender would seal to. The fingerprint is derived from the raw key
+bytes returned, not from the server's own fingerprint field; trusting
+its computed answer for a key/fingerprint binding would defeat the
+check.
+
+This catches the honest case — a rotation after the backup — and not a
+lying server, which would produce a false mismatch. That is the trust
+problem senders already have (whitepaper §5.2). What no server can do is
+make a *wrong* restore succeed: the unwrap is authenticated by the
+recovery key.
+
+A lookup that fails does **not** block the restore. Someone recovering
+is often doing so because things are broken, and stranding them to
+preserve a warning would invert the priority.
+
+### UI
+
+- The recovery key is shown **once**, and leaving that screen is gated
+  on an explicit acknowledgement — the value of the backup evaporates if
+  the user taps past it by reflex.
+- From the no-key state, **restore outranks replace**, and is the filled
+  button. Restore brings the original key back so everything already
+  sent opens; replacing abandons it. An earlier version offered only the
+  destructive option, which invited someone to throw away recoverable
+  mail because it was the only button on the screen.
+- The prompt to create a backup appears only when the status is
+  positively known to be absent. Nagging on an unknown — a network blip
+  — teaches users to dismiss it, which costs more than the prompt saves.
+
 ## Consequences
 
 - Web remains the weaker platform for receiving, and we say so in the
   product rather than implying parity.
-- Until the recovery key ships, eviction is mitigated but not solved;
-  `persist()` is best-effort and users can still clear storage.
+- Eviction is now survivable rather than merely mitigated — but only for
+  users who made a backup AND kept the recovery key. `persist()` remains
+  best-effort, and someone who does neither is exactly where they were.
+  The prompt is therefore doing real work, not decoration.
+- We have taken on a support burden we did not have: users will lose
+  recovery keys. That is a visible failure they had agency over, which
+  is strictly better than the silent automatic loss it replaces, but it
+  is not free.
 - Whitepaper §2.2 stays true. §8.5 (browser delivery) already records
   the residual web-delivery assumption, which the recovery key does not
   remove and slightly raises the value of — a malicious page could

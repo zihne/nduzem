@@ -39,6 +39,15 @@ class KeypairGenerator {
 
   final Sodium _sodium;
 
+  /// The libsodium instance this generator was built with.
+  ///
+  /// Exposed so callers that need other primitives — the key-backup
+  /// wrapping in ADR-0017 — use the SAME initialised instance rather
+  /// than standing up a second one. Two instances is not merely wasteful:
+  /// on web they mean two WASM modules, and a caller could end up using
+  /// whichever one it happened to hold.
+  Sodium get sodium => _sodium;
+
   /// Generate a fresh (identity, signing) keypair pair. Runs on the current
   /// isolate; libsodium's CSPRNG does the work, so total wall-clock is
   /// microseconds.
