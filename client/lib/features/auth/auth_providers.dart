@@ -251,3 +251,25 @@ class _LateBoundTokenSource implements TokenSource {
   @override
   Future<String?> refreshAccessToken() => _resolveRepo().refreshAccessToken();
 }
+
+
+/// Whether this account has an encrypted key backup.
+///
+/// Watched by the home screen so it can prompt when there is none. A
+/// separate provider rather than part of the session because it is a
+/// server fact that changes independently — creating a backup, or a key
+/// rotation invalidating one — and because a failure to fetch it must
+/// not take the whole session down with it.
+final keyBackupStatusProvider = FutureProvider<KeyBackupStatus?>((ref) async {
+  final session = await ref.watch(authSessionProvider.future);
+  if (session == null) return null;
+  try {
+    final repo = await ref.watch(authRepositoryProvider.future);
+    return await repo.keyBackupStatus();
+  } on Object {
+    // Unknown, not "absent". Nagging someone to make a backup they
+    // already have — because the network blipped — trains them to
+    // dismiss the prompt, which is worse than not showing it.
+    return null;
+  }
+});

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:developer' as developer;
 
 import 'package:flutter/services.dart';
@@ -8,6 +9,7 @@ import '../../api/users_api.dart';
 import '../../crypto/fingerprint.dart';
 import '../../crypto/jwt.dart';
 import '../../crypto/keys.dart';
+import '../../crypto/recovery_key.dart';
 import '../../storage/secure_storage.dart';
 
 /// Owns the authenticated-user lifecycle:
@@ -443,9 +445,10 @@ class AuthRepository implements TokenSource {
   ///
   /// **Ordering is the whole design here.** The new private keys are
   /// written to secure storage BEFORE the server is told about the new
-  /// public keys. Publish-then-persist has a window where the directory
-  /// advertises a key this device cannot use — senders would seal to it
-  /// immediately and the user would be worse off than before rotating,
+  /// public keys. Publish-then-persist has a window where the account
+  /// PUBLISHES a key this device cannot use — `POST /v1/users/lookup`
+  /// would hand it to senders immediately, and they would seal files the
+  /// user cannot open, leaving them worse off than before rotating,
   /// which is a cruel outcome for an operation whose entire purpose is
   /// recovering from key loss.
   ///
@@ -499,6 +502,154 @@ class AuthRepository implements TokenSource {
 
     await _storage.write(SecureStore.kFingerprint, fp.canonical);
     return result;
+  }
+
+  // --- encrypted key backup / recovery (ADR-0017) --------------------------
+
+  /// Generate a recovery key, wrap this device's keypair under it, and
+  /// upload the result.
+  ///
+  /// The returned [RecoveryKey] is the ONLY copy that will ever exist.
+  /// It is not persisted here and not sent anywhere — the caller must
+  /// show it to the user, and once that screen is dismissed it is gone.
+  /// That is the whole design: the server holds ciphertext it has no key
+  /// for, so nobody, including us, can recover the account without it.
+  Future<RecoveryKey> createKeyBackup({required String password}) async {
+    final userId = await _storage.read(SecureStore.kUserId);
+    if (userId == null) throw StateError('Not signed in.');
+
+    final pair = await _loadKeypair(userId);
+    if (pair == null) {
+      // Backing up a key this device does not have would produce a
+      // backup of nothing, and the user would believe they were
+      // protected. Fail plainly instead.
+      throw StateError(
+        'This device does not hold the keys for this account, so there is '
+        'nothing to back up. Sign in where the keys are, or restore from '
+        'an existing backup first.',
+      );
+    }
+
+    final sodium = _keys.sodium;
+    final recovery = RecoveryKey.generate(sodium);
+    final fingerprint = fingerprintOf(
+      identityPublic: pair.identityPublic,
+      signingPublic: pair.signingPublic,
+    ).canonical;
+
+    final blob = wrapKeypairForBackup(
+      sodium: sodium,
+      recovery: recovery,
+      pair: pair,
+      fingerprint: fingerprint,
+    );
+
+    await _usersApi.putKeyBackup(
+      blobB64: base64Encode(blob),
+      password: password,
+    );
+    return recovery;
+  }
+
+  /// Fetch the backup and unwrap it with [recovery], then persist the
+  /// keypair locally.
+  ///
+  /// Before writing anything, checks the restored key against the
+  /// public key the account currently PUBLISHES — the one
+  /// `POST /v1/users/lookup` hands to senders so they know what to seal
+  /// to. An old backup, taken before a key rotation, unwraps perfectly
+  /// and yields a keypair nobody sends to any more; without this check
+  /// the restore reports success and then decrypts nothing, which is a
+  /// miserable thing to diagnose from a support email.
+  ///
+  /// Checked against the SERVER rather than this device's cached
+  /// fingerprint, because in a restore the device's local state is
+  /// precisely what is missing. Note this catches the honest case — a
+  /// rotation after the backup — and not a lying server: one that
+  /// returned someone else's keys would produce a false mismatch, which
+  /// is the trust problem senders already have (whitepaper §5.2). What
+  /// it cannot do is make a wrong restore succeed; the unwrap is
+  /// authenticated by the recovery key.
+  Future<RestoredKeypair> restoreFromKeyBackup(RecoveryKey recovery) async {
+    final userId = await _storage.read(SecureStore.kUserId);
+    if (userId == null) throw StateError('Not signed in.');
+
+    final blobB64 = await _usersApi.getKeyBackupBlob();
+    if (blobB64 == null) {
+      throw StateError('This account has no key backup to restore from.');
+    }
+
+    final sodium = _keys.sodium;
+    final restored = unwrapKeypairFromBackup(
+      sodium: sodium,
+      recovery: recovery,
+      blob: Uint8List.fromList(base64Decode(blobB64)),
+    );
+
+    final derived = fingerprintOf(
+      identityPublic: restored.pair.identityPublic,
+      signingPublic: restored.pair.signingPublic,
+    );
+    final published = await _publishedFingerprint();
+    if (published != null && published != derived.canonical) {
+      throw StaleKeyBackup(
+        backupFingerprint: derived.display,
+        currentFingerprint: Fingerprint(published).display,
+      );
+    }
+
+    await _persistKeypair(userId: userId, pair: restored.pair);
+    await _storage.write(SecureStore.kFingerprint, derived.canonical);
+    return restored;
+  }
+
+  Future<KeyBackupStatus> keyBackupStatus() => _usersApi.keyBackupStatus();
+
+  Future<void> deleteKeyBackup({required String password}) async {
+    await _usersApi.deleteKeyBackup(password: password);
+  }
+
+  /// The fingerprint of the public key this account currently
+  /// PUBLISHES via `POST /v1/users/lookup` — i.e. what a sender would
+  /// seal a file to right now. Fetched rather than read from local
+  /// state, because local state is exactly what is missing in the
+  /// situation a restore addresses.
+  Future<String?> _publishedFingerprint() async {
+    try {
+      final me = await _usersApi.me();
+      final handle = me.handle;
+      if (handle == null) return null;
+      final found = await _usersApi.lookup(handle: handle);
+      // Derive from the returned PUBLIC KEY BYTES rather than reading
+      // the server's own `serverKeyFingerprint` field. The lookup
+      // returns raw key bytes for exactly this reason: taking the
+      // server's word for a key/fingerprint binding would defeat the
+      // check being made here.
+      return fingerprintOf(
+        identityPublic: found.identityPublic,
+        signingPublic: found.signingPublic,
+      ).canonical;
+    } on Object {
+      // A lookup we cannot complete is not a reason to refuse a
+      // restore — the user may be recovering precisely because things
+      // are broken. The unwrap is authenticated on its own, so the
+      // worst case is proceeding without the staleness warning.
+      return null;
+    }
+  }
+
+  Future<IdentityKeypair?> _loadKeypair(String userId) async {
+    final ip = await _storage.readBytes(SecureStore.identityPrivateKeyFor(userId));
+    final iu = await _storage.readBytes(SecureStore.identityPublicKeyFor(userId));
+    final sp = await _storage.readBytes(SecureStore.signingPrivateKeyFor(userId));
+    final su = await _storage.readBytes(SecureStore.signingPublicKeyFor(userId));
+    if (ip == null || iu == null || sp == null || su == null) return null;
+    return IdentityKeypair(
+      identityPublic: iu,
+      identityPrivate: ip,
+      signingPublic: su,
+      signingPrivate: sp,
+    );
   }
 
   // --- internals -----------------------------------------------------------

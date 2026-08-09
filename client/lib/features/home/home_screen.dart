@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../crypto/fingerprint.dart';
 import '../auth/auth_providers.dart';
+import '../../api/users_api.dart';
 import '../auth/auth_repository.dart';
 import 'fingerprint_qr_sheet.dart';
 import '../../widgets/max_width_content.dart';
@@ -84,7 +85,10 @@ class HomeScreen extends ConsumerWidget {
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
                 const SizedBox(height: 24),
-                _FingerprintCard(fingerprint: fingerprint),
+                _FingerprintCard(
+                  fingerprint: fingerprint,
+                  backedUp: ref.watch(keyBackupStatusProvider).valueOrNull,
+                ),
                 const SizedBox(height: 24),
                 Row(
                   children: [
@@ -172,8 +176,13 @@ class HomeScreen extends ConsumerWidget {
 }
 
 class _FingerprintCard extends StatelessWidget {
-  const _FingerprintCard({required this.fingerprint});
+  const _FingerprintCard({required this.fingerprint, this.backedUp});
   final Fingerprint? fingerprint;
+
+  /// Null means "we could not find out" — distinct from "no backup".
+  /// Prompting on an unknown would nag people who are already protected
+  /// whenever the network hiccups, which teaches them to dismiss it.
+  final KeyBackupStatus? backedUp;
 
   @override
   Widget build(BuildContext context) {
@@ -240,6 +249,25 @@ class _FingerprintCard extends StatelessWidget {
             // destination screen, where they are: password, second
             // factor, and an explicit acknowledgement of the loss.
             if (fp == null) ...[
+              // Restore comes first, and is the filled button, because
+              // it is strictly the better outcome: it brings the
+              // ORIGINAL key back, so everything already sent opens.
+              // Replacing the key abandons all of it. Offering only the
+              // destructive option — as an earlier version did — invites
+              // someone to throw away recoverable mail because it was
+              // the only button on the screen.
+              const SizedBox(height: 12),
+              FilledButton.icon(
+                onPressed: () => context.push('/restore-key'),
+                icon: const Icon(Icons.restore),
+                label: const Text('Restore from recovery key'),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Gets your original key back, so files already sent to '
+                'you will open. Needs the recovery key you saved.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
               const SizedBox(height: 12),
               OutlinedButton.icon(
                 onPressed: () => context.push('/rotate-key'),
@@ -248,8 +276,9 @@ class _FingerprintCard extends StatelessWidget {
               ),
               const SizedBox(height: 4),
               Text(
-                "Only if it's gone for good. This lets people send to you "
-                'again; it cannot open files already sent.',
+                "Only if it's gone for good and you have no recovery key. "
+                'This lets people send to you again; it cannot open files '
+                'already sent.',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ]
@@ -313,6 +342,43 @@ class _FingerprintCard extends StatelessWidget {
                 'Files already sent to you will stop opening.',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
+              // The prompt that prevents the problem rather than
+              // recovering from it. Only when we positively know there
+              // is no backup — see `backedUp`.
+              if (backedUp != null && !backedUp!.exists) ...[
+                const SizedBox(height: 16),
+                Card(
+                  color: Theme.of(context).colorScheme.tertiaryContainer,
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Your key is not backed up',
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'If you lose this device, files sent to you can '
+                          'never be opened again. A backup takes a minute '
+                          'and we still cannot read your files.',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: FilledButton.tonalIcon(
+                            onPressed: () => context.push('/key-backup'),
+                            icon: const Icon(Icons.backup_outlined, size: 18),
+                            label: const Text('Back up my key'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             ],
           ],
         ),
