@@ -101,6 +101,19 @@ void main() {
       );
     });
 
+    testWidgets('does not tell the user their key is unrecoverable',
+        (tester) async {
+      // This copy predated recovery existing and said "Keys cannot be
+      // recovered" directly above the Restore button — telling someone
+      // not to bother with the action they were being offered. Copy
+      // written before a feature exists does not update itself.
+      final rec = _Recorder();
+      await pump(tester, _home(rec, fingerprint: ''));
+      expect(find.textContaining('cannot be recovered'), findsNothing);
+      // And it should point at the route that now exists.
+      expect(find.textContaining('recovery key'), findsWidgets);
+    });
+
     testWidgets('restore navigates to the restore flow', (tester) async {
       final rec = _Recorder();
       await pump(tester, _home(rec, fingerprint: ''));
@@ -186,14 +199,34 @@ void main() {
       expect(find.textContaining('old key stops working'), findsOneWidget);
     });
 
-    testWidgets('stays hidden when the status is unknown', (tester) async {
+    testWidgets('does not NAG when the status is unknown', (tester) async {
       // Null means the lookup failed, not that there is no backup.
-      // Nagging someone who is already protected whenever the network
-      // hiccups teaches them to dismiss the prompt, which costs more
-      // than the prompt ever saved.
+      // Claiming "not backed up" would alarm people who are fine, and
+      // teach them to dismiss the warning.
       final rec = _Recorder();
       await pump(tester, _home(rec, fingerprint: '1' * 25, backup: null));
       expect(find.textContaining('not backed up'), findsNothing);
+    });
+
+    testWidgets('but a route still exists when the status is unknown',
+        (tester) async {
+      // The bug this pins: an earlier version gated EVERY branch on
+      // knowing the status, so one failed request made the whole
+      // feature invisible with no way in. Whether to nag depends on
+      // knowing; whether there is a route must not depend on anything.
+      final rec = _Recorder();
+      await pump(tester, _home(rec, fingerprint: '1' * 25, backup: null));
+
+      final entry = find.widgetWithText(TextButton, 'Key backup…');
+      expect(
+        entry,
+        findsOneWidget,
+        reason: 'no way to reach backup when the status lookup fails',
+      );
+      await tester.ensureVisible(entry);
+      await tester.tap(entry);
+      await tester.pumpAndSettle();
+      expect(rec.pushed, ['/key-backup']);
     });
   });
 
@@ -223,6 +256,69 @@ void main() {
         find.textContaining('does not unlock the backup'),
         findsOneWidget,
       );
+    });
+  });
+
+
+  group('with the REAL status provider', () {
+    testWidgets('a failing lookup still leaves a way in', (tester) async {
+      // Every other test in this file overrides keyBackupStatusProvider,
+      // which is precisely how the original bug survived: the real
+      // provider swallows any error and returns null, and the UI hid
+      // everything on null. A stubbed provider can never reproduce that.
+      //
+      // Here the provider is NOT overridden. There is no server, so it
+      // takes its failure path — the same one a blip or an expired
+      // token takes in production.
+      tester.view.physicalSize = const Size(1200, 3400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final rec = _Recorder();
+      final router = GoRouter(
+        initialLocation: '/',
+        routes: [
+          GoRoute(path: '/', builder: (_, __) => const HomeScreen()),
+          GoRoute(
+            path: '/key-backup',
+            builder: (_, __) {
+              rec.pushed.add('/key-backup');
+              return const Scaffold(body: Text('backup'));
+            },
+          ),
+        ],
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            authSessionProvider.overrideWith(
+              () => _StubSession(
+                AuthSession(
+                  userId: 'u1',
+                  email: 'a@example.com',
+                  handle: 'alice',
+                  fingerprint: '1' * 25,
+                  mfaEnabled: false,
+                ),
+              ),
+            ),
+          ],
+          child: MaterialApp.router(routerConfig: router),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final entry = find.widgetWithText(TextButton, 'Key backup…');
+      expect(
+        entry,
+        findsOneWidget,
+        reason: 'the real provider failed and the feature vanished',
+      );
+      await tester.ensureVisible(entry);
+      await tester.tap(entry);
+      await tester.pumpAndSettle();
+      expect(rec.pushed, ['/key-backup']);
     });
   });
 }

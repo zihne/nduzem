@@ -219,17 +219,20 @@ class _FingerprintCard extends StatelessWidget {
               Text(
                 kIsWeb
                     ? '(not available in this browser)\n\n'
-                        'Your key is stored by the browser you registered '
-                        'with, and is not shared between browsers or '
-                        'computers. Open OpaqueShare in that browser to '
-                        'see your fingerprint and to open files sent to '
-                        'you.\n\n'
-                        'If you registered here and it has disappeared, '
-                        'the browser may have cleared its storage. Keys '
-                        'cannot be recovered, and files already sent to '
-                        'you cannot be opened without them.'
-                    : '(not available on this device — sign in on the '
-                        'device where you registered to view it)',
+                        'Your key is stored by the browser or device you '
+                        'registered with, and is not shared automatically. '
+                        'If you saved a recovery key, restore it below — '
+                        'that installs the same key here, and files sent '
+                        'to you will open.\n\n'
+                        'Without a recovery key, open OpaqueShare where '
+                        'the key already is. If that device is gone and '
+                        'you have no recovery key, the key cannot be '
+                        'brought back and files already sent cannot be '
+                        'opened.'
+                    : '(not available on this device)\n\n'
+                        'If you saved a recovery key, restore it below to '
+                        'install the same key on this device. Otherwise '
+                        'sign in on the device where you registered.',
                 style: const TextStyle(fontStyle: FontStyle.italic),
               ),
             // Prominent when the key is ABSENT — this is the only way
@@ -342,16 +345,34 @@ class _FingerprintCard extends StatelessWidget {
                 'Files already sent to you will stop opening.',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
-              // A PERMANENT entry point, shown once a backup exists.
+              // Key backup. THREE states, and the entry point exists in
+              // all of them.
               //
-              // The prompt below only appears when there is none, so
-              // without this there was no route at all after the first
-              // backup — including for the case that most needs one:
-              // losing the recovery key while still holding the device.
-              // That is entirely recoverable (make a new backup, get a
-              // new key), and it had no button.
-              if (backedUp != null && backedUp!.exists) ...[
-                const SizedBox(height: 12),
+              // An earlier version gated every branch on `backedUp !=
+              // null`, so any failed status request — a blip, an expired
+              // token — made the whole feature invisible with no way in.
+              // That conflated two separate questions: whether to NAG,
+              // which does depend on knowing there is no backup, and
+              // whether there is a ROUTE, which must not depend on
+              // anything.
+              const SizedBox(height: 16),
+              if (backedUp == null) ...[
+                // Status unknown. Neutral wording — claiming either
+                // state would be a guess, and guessing "not backed up"
+                // alarms people who are fine.
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: () => context.push('/key-backup'),
+                    icon: const Icon(Icons.backup_outlined, size: 18),
+                    label: const Text('Key backup…'),
+                  ),
+                ),
+                Text(
+                  'Protects your key if you lose this device.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ] else if (backedUp!.exists) ...[
                 Row(
                   children: [
                     Icon(
@@ -376,12 +397,10 @@ class _FingerprintCard extends StatelessWidget {
                   'get a new one. The old key stops working.',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
-              ],
-              // The prompt that prevents the problem rather than
-              // recovering from it. Only when we positively know there
-              // is no backup — see `backedUp`.
-              if (backedUp != null && !backedUp!.exists) ...[
-                const SizedBox(height: 16),
+              ] else ...[
+                // Known to be absent: this is the one that earns a
+                // prominent card, because the user is one device failure
+                // away from losing everything sent to them.
                 Card(
                   color: Theme.of(context).colorScheme.tertiaryContainer,
                   child: Padding(
