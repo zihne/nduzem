@@ -17,6 +17,8 @@ import 'features/billing/paywall_screen.dart';
 import 'features/history/transfer_history_screen.dart';
 import 'features/home/home_screen.dart';
 import 'features/transfers/batch_send_screen.dart';
+import 'features/settings/delete_account_screen.dart';
+import 'features/settings/settings_screen.dart';
 import 'features/transfers/inbox_screen.dart';
 import 'features/transfers/link_receive_screen.dart';
 import 'features/transfers/receive_screen.dart';
@@ -80,6 +82,14 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/restore-key',
         builder: (_, __) => const RestoreKeyScreen(),
+      ),
+      GoRoute(
+        path: '/settings',
+        builder: (_, __) => const SettingsScreen(),
+      ),
+      GoRoute(
+        path: '/settings/delete-account',
+        builder: (_, __) => const DeleteAccountScreen(),
       ),
       GoRoute(
         path: '/login/totp',
