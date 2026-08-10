@@ -609,6 +609,33 @@ class AuthRepository implements TokenSource {
     await _usersApi.deleteKeyBackup(password: password);
   }
 
+  /// Erase the account (GDPR Art. 17) and destroy every local trace of
+  /// it. Irreversible on both sides.
+  ///
+  /// Two ordering decisions, both deliberate:
+  ///
+  /// **The server call comes first.** Purging local state before the
+  /// request would mean a network failure, a wrong password, or a
+  /// moderation hold leaves the user signed out of an account that
+  /// still exists, with their identity keys already destroyed — every
+  /// transfer ever sealed to them unreadable, for an operation that
+  /// did not happen. Local teardown only runs once the server has
+  /// confirmed.
+  ///
+  /// **`purgeAll`, not `purgeSession`.** Sign-out keeps the keypair so
+  /// the user can sign back in and still read their mail. Here the
+  /// account is gone, so the keys unlock nothing — and leaving private
+  /// keys on the device after "delete my account" would contradict
+  /// what the user was told. Other accounts' key slots on the same
+  /// device are preserved (ADR-0011); only this one is destroyed.
+  Future<ErasureReceipt> eraseAccount({required String password}) async {
+    final receipt = await _usersApi.eraseAccount(password: password);
+    _accessCache = null;
+    _refreshCache = null;
+    await _storage.purgeAll();
+    return receipt;
+  }
+
   /// The fingerprint of the public key this account currently
   /// PUBLISHES via `POST /v1/users/lookup` — i.e. what a sender would
   /// seal a file to right now. Fetched rather than read from local

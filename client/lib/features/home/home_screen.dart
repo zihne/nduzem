@@ -51,13 +51,41 @@ class HomeScreen extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('OpaqueShare'),
         actions: [
-          IconButton(
-            tooltip: 'Sign out',
-            icon: const Icon(Icons.logout),
-            onPressed: () async {
-              await ref.read(authSessionProvider.notifier).clear();
-              if (context.mounted) context.go('/login');
+          // The account menu our published deletion policy tells users
+          // to look for ("account menu → Settings → Delete my
+          // account"). Sign-out stays in it rather than moving to
+          // Settings — it is the one action people reach for often
+          // enough to want in one tap.
+          PopupMenuButton<String>(
+            tooltip: 'Account',
+            icon: const Icon(Icons.account_circle_outlined),
+            onSelected: (value) async {
+              switch (value) {
+                case 'settings':
+                  context.push('/settings');
+                case 'signout':
+                  await ref.read(authSessionProvider.notifier).clear();
+                  if (context.mounted) context.go('/login');
+              }
             },
+            itemBuilder: (_) => const [
+              PopupMenuItem(
+                value: 'settings',
+                child: ListTile(
+                  leading: Icon(Icons.settings_outlined),
+                  title: Text('Settings'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              PopupMenuItem(
+                value: 'signout',
+                child: ListTile(
+                  leading: Icon(Icons.logout),
+                  title: Text('Sign out'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+            ],
           ),
         ],
       ),

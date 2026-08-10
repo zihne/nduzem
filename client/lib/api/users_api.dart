@@ -3,6 +3,15 @@ import 'dart:typed_data';
 
 import 'api_client.dart';
 
+/// The exact phrase the erasure endpoint checks, verbatim.
+///
+/// Mirrors `_ERASURE_CONFIRM_PHRASE` in the server's `users.py`. It is a
+/// deliberate speed bump, not a secret: the server uses it to tell "the
+/// user typed this on purpose" apart from "some code posted a stray
+/// body." Exported so the UI can display exactly what it will send —
+/// asking someone to type a phrase we then alter would be a trap.
+const String erasureConfirmPhrase = 'ERASE MY ACCOUNT';
+
 /// `/v1/users/*` client.
 class UsersApi {
   const UsersApi(this._client);
@@ -140,6 +149,32 @@ class UsersApi {
     return KeyBackupStatus.fromJson(body);
   }
 
+  /// `POST /v1/users/me/erasure` — GDPR Article 17. Irreversible.
+  ///
+  /// The confirmation phrase is fixed by the server and checked
+  /// verbatim, so it is sent from a constant here rather than composed
+  /// at the call site: a typo in a string literal on the client would
+  /// surface as a 400 the user cannot act on.
+  ///
+  /// Failure modes worth distinguishing at the UI layer, all raised as
+  /// `ApiException` with the server's own detail text:
+  ///   400 — phrase mismatch
+  ///   401 — wrong password
+  ///   403 — account under moderation review (erasure withheld while an
+  ///         abuse investigation is open; server ADR-0025)
+  ///   409 — already erased
+  Future<ErasureReceipt> eraseAccount({required String password}) async {
+    final body = await _client.post(
+      '/v1/users/me/erasure',
+      body: <String, dynamic>{
+        'password': password,
+        'confirm': erasureConfirmPhrase,
+      },
+      authed: true,
+    );
+    return ErasureReceipt.fromJson(body);
+  }
+
   /// Look up a user by email OR handle (exactly one of the two).
   ///
   /// POST-with-body (not GET-with-query) so the email / handle value
@@ -244,6 +279,38 @@ class IdentityKeyRotation {
   final int pendingTransfersUnreadable;
 }
 
+
+/// The receipt returned by a successful erasure.
+///
+/// Kept as a value rather than discarded because the user is entitled
+/// to know what was destroyed and what survives — `retainedNotice`
+/// carries the server's statement of what is held back for audit and
+/// referential integrity, and it is the only place the user will ever
+/// see it. Showing "your account is gone" without it would overstate
+/// what happened.
+class ErasureReceipt {
+  const ErasureReceipt({
+    required this.erasedAt,
+    required this.pendingTransfersBurned,
+    required this.retainedNotice,
+  });
+
+  final DateTime erasedAt;
+
+  /// Transfers that were in flight to this account and were destroyed
+  /// unread. Worth surfacing: it is the one consequence a user might
+  /// not have anticipated when they tapped delete.
+  final int pendingTransfersBurned;
+
+  /// What the server keeps, and why. Server ADR-0025.
+  final String retainedNotice;
+
+  factory ErasureReceipt.fromJson(Map<String, dynamic> body) => ErasureReceipt(
+        erasedAt: DateTime.parse(body['erased_at'] as String),
+        pendingTransfersBurned: body['pending_transfers_burned'] as int? ?? 0,
+        retainedNotice: body['retained_notice'] as String? ?? '',
+      );
+}
 
 /// Whether the account has an encrypted key backup, and when it was
 /// last written. Deliberately carries no fragment of the blob.
