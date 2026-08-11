@@ -155,6 +155,22 @@ class AuthRepository implements TokenSource {
     return baseline.copyWith(
       email: me.email,
       handle: me.handle,
+      // Re-derived, not carried over. The fingerprint is a pure function
+      // of the keypair on THIS device, and the two callers that matter
+      // most call `refreshMe` precisely because that keypair just
+      // changed: restore-from-recovery-key installs one where there was
+      // none, and rotation replaces it.
+      //
+      // Carrying `baseline.fingerprint` through meant neither took
+      // effect until the next sign-in (which re-runs `restoreSession`,
+      // which does derive). After a restore the home screen kept seeing
+      // an empty fingerprint and kept offering "Restore from recovery
+      // key" for a key that was already on disk; after a rotation it
+      // kept displaying the superseded safety number, which is the one
+      // value that must never be stale — a user reading it aloud for
+      // out-of-band verification would give a number that no longer
+      // matches their published key.
+      fingerprint: await _deriveFingerprint(baseline.userId),
       // The server is authoritative for these two — if the caller enrolled
       // in MFA on another device, or verified their email via a link on
       // desktop, `/me` reflects reality faster than the local bit.
