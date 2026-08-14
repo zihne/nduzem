@@ -1,9 +1,11 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../api/api_client.dart';
+import '../../core/external_launcher.dart';
 import '../../widgets/password_form_field.dart';
 import 'auth_providers.dart';
 import '../../widgets/max_width_content.dart';
@@ -28,8 +30,61 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
     _email.dispose();
     _password.dispose();
     _handle.dispose();
+    // Gesture recognizers hold a reference to their callback and are
+    // not garbage-collected with the TextSpan that used them.
+    _termsTap.dispose();
+    _privacyTap.dispose();
     super.dispose();
   }
+
+  /// The agreement line under "Create account".
+  ///
+  /// Built with real tap targets rather than a sentence naming two
+  /// documents the reader cannot reach — an agreement you are told
+  /// about but cannot read is not one anybody has actually accepted.
+  Widget _agreementNotice(BuildContext context) {
+    final theme = Theme.of(context);
+    final linkStyle = theme.textTheme.bodySmall?.copyWith(
+      color: theme.colorScheme.primary,
+      decoration: TextDecoration.underline,
+    );
+    return Text.rich(
+      TextSpan(
+        style: theme.textTheme.bodySmall,
+        children: [
+          const TextSpan(text: 'By creating an account you agree to our '),
+          TextSpan(
+            text: 'Terms of Service',
+            style: linkStyle,
+            recognizer: _termsTap,
+          ),
+          const TextSpan(text: ' and '),
+          TextSpan(
+            text: 'Privacy Policy',
+            style: linkStyle,
+            recognizer: _privacyTap,
+          ),
+          const TextSpan(text: '.'),
+        ],
+      ),
+      textAlign: TextAlign.center,
+    );
+  }
+
+  Future<void> _openLegal(String file) async {
+    final uri = ref.read(appConfigProvider).legalPage(file);
+    final result = await launchExternalUri(uri);
+    if (result == ExternalLaunchResult.noHandler && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Open this in a browser: $uri')),
+      );
+    }
+  }
+
+  late final _termsTap = TapGestureRecognizer()
+    ..onTap = () => _openLegal('terms.html');
+  late final _privacyTap = TapGestureRecognizer()
+    ..onTap = () => _openLegal('privacy.html');
 
   Future<void> _submit() async {
     if (!_form.currentState!.validate()) return;
@@ -149,6 +204,13 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                       )
                     : const Text('Create account'),
               ),
+              const SizedBox(height: 12),
+              // Our terms open with "by creating an account you agree to
+              // them" — true of the document, and not of the product:
+              // this screen neither said so nor offered any way to read
+              // them. Stated at the point of agreement, with both
+              // documents one tap away.
+              _agreementNotice(context),
               if (_error != null) ...[
                 const SizedBox(height: 12),
                 Text(

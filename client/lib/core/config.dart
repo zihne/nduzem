@@ -37,6 +37,19 @@ class AppConfig {
   /// See class docstring for why.
   final Uri shareUrlBase;
 
+  /// URL of a published legal page — privacy policy, terms, deletion
+  /// policy. They are served from the marketing origin, the same one
+  /// share links use, so a dev build pointed at localhost opens the
+  /// local copies.
+  ///
+  /// A method rather than the two-line expression inlined at each call
+  /// site: the settings screen and the sign-up screen both need these,
+  /// and a construction copied into two files is one that can be
+  /// correct in one of them. The first version was — it shipped
+  /// `'/\$file'` with an escaped dollar in one place, which produces a
+  /// link to the literal path `/$file` and analyses perfectly cleanly.
+  Uri legalPage(String file) => shareUrlBase.replace(path: '/$file');
+
   /// Compile-time defaults; harmless placeholder in production because
   /// the launcher must inject real values via --dart-define. The URIs
   /// parse eagerly so a bad build flag surfaces at startup, not on the
