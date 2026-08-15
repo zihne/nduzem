@@ -1,4 +1,4 @@
-package com.opaqueshare.app
+package com.nduzem.app
 
 import android.app.Activity
 import android.content.Intent
@@ -44,7 +44,7 @@ class SafStreamSavePlugin(private val activity: Activity) :
     MethodChannel.MethodCallHandler {
 
     companion object {
-        const val CHANNEL = "com.opaqueshare.app/saf_stream_save"
+        const val CHANNEL = "com.nduzem.app/saf_stream_save"
         // Request code space reserved for this plugin. Kept high to
         // avoid collision with other plugins that also grab a
         // startActivityForResult slot.
