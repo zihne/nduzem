@@ -44,7 +44,7 @@ cd client
 flutter build ios --simulator --debug
 xcrun simctl boot "iPhone 17"
 xcrun simctl install booted build/ios/iphonesimulator/Runner.app
-xcrun simctl launch booted com.opaqueshare.app
+xcrun simctl launch booted com.nduzem.app
 
 # …or just
 flutter run -d "iPhone 17"
@@ -132,7 +132,7 @@ is a form, not an audit.
 Configured in `ios/Runner/Runner.entitlements` as
 `applinks:nduzem.com`, but inert until:
 
-1. **Associated Domains capability** enabled for `com.opaqueshare.app`
+1. **Associated Domains capability** enabled for `com.nduzem.app`
    in the Apple Developer portal, and the provisioning profile
    regenerated afterwards.
 2. **Team ID** substituted for the `TEAMID` placeholder in

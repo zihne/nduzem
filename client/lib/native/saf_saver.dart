@@ -97,7 +97,7 @@ class _MethodChannelSafSaver extends SafSaver {
   const _MethodChannelSafSaver();
 
   static const _channel =
-      MethodChannel('com.opaqueshare.app/saf_stream_save');
+      MethodChannel('com.nduzem.app/saf_stream_save');
 
   @override
   Future<SafPickedDestination?> pickSaveUri({

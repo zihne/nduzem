@@ -51,7 +51,7 @@ Open questions:
 ### Split channel: `pickSaveUri` + `writeFileToUri`
 
 Two round-trips over one method channel
-(`com.opaqueshare.nduzem/saf_stream_save`):
+(`com.nduzem.app/saf_stream_save`):
 
 - `pickSaveUri(suggestedFilename: String) -> String?` launches
   `ACTION_CREATE_DOCUMENT` via `startActivityForResult` +

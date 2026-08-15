@@ -24,7 +24,7 @@
 		OPERATOR TODO (both must be done or universal links silently fall
 		back to opening Safari):
 		  1. Enable the Associated Domains capability for
-		     com.opaqueshare.app in the Apple Developer portal, then
+		     com.nduzem.app in the Apple Developer portal, then
 		     regenerate the provisioning profile.
 		  2. Replace TEAMID in the AASA file with the real Apple
 		     Developer Team ID and deploy it. iOS fetches the AASA over
