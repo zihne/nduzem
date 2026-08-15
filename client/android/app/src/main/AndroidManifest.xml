@@ -30,7 +30,7 @@
         does not govern device-to-device transfer.
     -->
     <application
-        android:label="OpaqueShare"
+        android:label="Nduzem"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
@@ -76,7 +76,7 @@
                 Android verifies the assetlinks.json once per host,
                 not per prefix.
 
-                OPERATOR TODO: replace `opaqueshare.com` with the real
+                OPERATOR TODO: replace `nduzem.com` with the real
                 deployment host, and deploy a matching
                 .well-known/assetlinks.json at that host containing this
                 app's release SHA-256 signing fingerprints (upload key
@@ -90,7 +90,7 @@
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
                 <data android:scheme="https"/>
-                <data android:host="opaqueshare.com"/>
+                <data android:host="nduzem.com"/>
                 <data android:pathPrefix="/r/"/>
                 <data android:pathPrefix="/password-reset"/>
                 <data android:pathPrefix="/verify-email"/>

@@ -1,10 +1,10 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:opaqueshare/crypto/envelope.dart';
-import 'package:opaqueshare/crypto/file_crypto.dart';
-import 'package:opaqueshare/crypto/suite.dart';
-import 'package:opaqueshare/crypto/suite_keys.dart';
+import 'package:nduzem/crypto/envelope.dart';
+import 'package:nduzem/crypto/file_crypto.dart';
+import 'package:nduzem/crypto/suite.dart';
+import 'package:nduzem/crypto/suite_keys.dart';
 import 'package:sodium_libs/sodium_libs.dart';
 
 import 'sodium_test_support.dart';

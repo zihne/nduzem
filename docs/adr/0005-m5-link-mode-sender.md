@@ -68,8 +68,8 @@ ${apiBaseUrl}/r/<transfer_id>#<K_file_base64url>
 ```
 
 No new config knob needed. If we ever separate the public web
-origin from the API origin (e.g. `api.opaqueshare.com` vs
-`link.opaqueshare.com`), we add a `linkBaseUrl` setting and the
+origin from the API origin (e.g. `api.nduzem.com` vs
+`link.nduzem.com`), we add a `linkBaseUrl` setting and the
 share URL builder switches over — trivial follow-up.
 
 **Base64url without padding** for the fragment: 32 bytes of key →

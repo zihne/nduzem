@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# build-release.sh — build a Play-Store-ready OpaqueShare AAB with
+# build-release.sh — build a Play-Store-ready Nduzem AAB with
 # every pre- and post-flight check inline.
 #
 # What it does, in order:
@@ -29,10 +29,10 @@
 # stderr explaining what to fix.
 #
 # Usage:
-#   scripts/build-release.sh [OPAQUESHARE_API_BASE]
+#   scripts/build-release.sh [NDUZEM_API_BASE]
 #
 # Or via env var:
-#   OPAQUESHARE_API_BASE=https://api.opaqueshare.com scripts/build-release.sh
+#   NDUZEM_API_BASE=https://api.nduzem.com scripts/build-release.sh
 #
 # The API base MUST be an https:// URL for a production build. The
 # script warns (but doesn't fail) on http:// so you can still run it
@@ -66,15 +66,15 @@ fail() {
 }
 
 # --- resolve arguments -----------------------------------------------
-API_BASE="${1:-${OPAQUESHARE_API_BASE:-}}"
+API_BASE="${1:-${NDUZEM_API_BASE:-}}"
 if [[ -z "$API_BASE" ]]; then
-    fail "OPAQUESHARE_API_BASE is required.
+    fail "NDUZEM_API_BASE is required.
 
 Usage:
-  scripts/build-release.sh https://api.opaqueshare.com [https://opaqueshare.com]
+  scripts/build-release.sh https://api.nduzem.com [https://nduzem.com]
 
 Or:
-  export OPAQUESHARE_API_BASE=https://api.opaqueshare.com
+  export NDUZEM_API_BASE=https://api.nduzem.com
   scripts/build-release.sh"
 fi
 
@@ -88,13 +88,13 @@ esac
 # stripping `api.` from the API host (client's AppConfig does the same
 # derivation, so passing this arg explicitly is optional when the
 # `api.<host>` / `<host>` convention holds).
-SHARE_URL_BASE="${2:-${OPAQUESHARE_SHARE_URL_BASE:-}}"
+SHARE_URL_BASE="${2:-${NDUZEM_SHARE_URL_BASE:-}}"
 if [[ -z "$SHARE_URL_BASE" ]]; then
     # Derive by stripping a leading `api.` from the URL's host.
     #
     # Was `${API_BASE/\/\/api./\/\/}`, which is broken: bash keeps the
     # backslashes in the replacement half of a pattern substitution, so
-    # it produced `https:\/\/opaqueshare.com` and then tripped the
+    # it produced `https:\/\/nduzem.com` and then tripped the
     # validation below with a message that blamed the input. It failed
     # safe rather than baking a malformed URL into a release, but the
     # "omit the second argument" path never actually worked.
@@ -102,7 +102,7 @@ if [[ -z "$SHARE_URL_BASE" ]]; then
     if [[ "$SHARE_URL_BASE" == "$API_BASE" ]]; then
         warn "Could not derive a share URL base from API base — no 'api.' prefix.
 Falling back to the API base as the share host. Set
-OPAQUESHARE_SHARE_URL_BASE explicitly if this is wrong for your setup."
+NDUZEM_SHARE_URL_BASE explicitly if this is wrong for your setup."
     fi
 fi
 
@@ -175,8 +175,8 @@ say "Building release AAB with:"
 say "  API base:   $API_BASE"
 say "  Share URL:  $SHARE_URL_BASE"
 flutter build appbundle --release \
-    --dart-define=OPAQUESHARE_API_BASE="$API_BASE" \
-    --dart-define=OPAQUESHARE_SHARE_URL_BASE="$SHARE_URL_BASE"
+    --dart-define=NDUZEM_API_BASE="$API_BASE" \
+    --dart-define=NDUZEM_SHARE_URL_BASE="$SHARE_URL_BASE"
 
 AAB="$CLIENT_ROOT/build/app/outputs/bundle/release/app-release.aab"
 if [[ ! -f "$AAB" ]]; then

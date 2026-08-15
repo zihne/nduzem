@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:opaqueshare/crypto/envelope.dart';
+import 'package:nduzem/crypto/envelope.dart';
 
 /// `enc_header` carries its own `blob_sha256`, sealed under K_file —
 /// the one hash in the envelope the server cannot forge. It was decoded

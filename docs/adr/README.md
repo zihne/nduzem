@@ -1,8 +1,8 @@
 # Architecture Decision Records (client)
 
-Public-repo ADRs for the OpaqueShare Flutter client + provability tooling.
+Public-repo ADRs for the Nduzem Flutter client + provability tooling.
 These sit alongside the server-side ADRs (in the separate private
-`opaqueshare-server` repo) and follow the same format: Context / Decision /
+`nduzem-server` repo) and follow the same format: Context / Decision /
 Consequences / Alternatives considered / Open follow-ups. Amendments are new
 ADRs, not edits to older ones.
 

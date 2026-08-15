@@ -210,7 +210,7 @@ RestoredKeypair unwrapKeypairFromBackup({
   for (var i = 0; i < _magic.length; i++) {
     if (blob[i] != _magic[i]) {
       throw const FormatException(
-        'This does not look like an OpaqueShare key backup.',
+        'This does not look like an Nduzem key backup.',
       );
     }
   }

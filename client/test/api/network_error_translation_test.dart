@@ -4,7 +4,7 @@ import 'dart:io' show SocketException;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 
-import 'package:opaqueshare/api/api_client.dart';
+import 'package:nduzem/api/api_client.dart';
 
 void main() {
   group('NetworkUnreachableException', () {

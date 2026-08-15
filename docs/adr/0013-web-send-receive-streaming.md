@@ -31,7 +31,7 @@ Every part of the mobile send/receive path assumes a filesystem:
    `<input type="file">` or drag-drop.
 
 2. **Intermediate storage**: `encryptFileToTempFile()` writes the
-   ciphertext to `<tempDir>/opaqueshare_send_XXX.bin`. The upload code
+   ciphertext to `<tempDir>/nduzem_send_XXX.bin`. The upload code
    then re-opens that temp file and streams part-sized chunks from it
    for multipart PUTs. Web has no `getTemporaryDirectory()`; ciphertext
    staging must live in memory or, better, never fully materialize.

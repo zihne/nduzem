@@ -11,12 +11,12 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 
-import 'package:opaqueshare/api/api_client.dart';
-import 'package:opaqueshare/api/auth_api.dart';
-import 'package:opaqueshare/api/users_api.dart';
-import 'package:opaqueshare/crypto/keys.dart';
-import 'package:opaqueshare/features/auth/auth_repository.dart';
-import 'package:opaqueshare/storage/secure_storage.dart';
+import 'package:nduzem/api/api_client.dart';
+import 'package:nduzem/api/auth_api.dart';
+import 'package:nduzem/api/users_api.dart';
+import 'package:nduzem/crypto/keys.dart';
+import 'package:nduzem/features/auth/auth_repository.dart';
+import 'package:nduzem/storage/secure_storage.dart';
 
 import '../../crypto/sodium_test_support.dart';
 

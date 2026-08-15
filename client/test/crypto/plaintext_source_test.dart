@@ -3,7 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:opaqueshare/crypto/plaintext_source.dart';
+import 'package:nduzem/crypto/plaintext_source.dart';
 
 /// Unit tests for the ADR-0013 Phase-1 `PlaintextSource` abstraction.
 ///

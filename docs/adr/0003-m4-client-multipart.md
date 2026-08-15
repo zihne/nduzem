@@ -61,7 +61,7 @@ Switch `FileCrypto.encryptFile` / `decryptFile` to
 [4-byte magic "OS4S"] [24-byte secretstream header] [chunk_1_ct] ... [chunk_N_ct]
 ```
 
-- **Magic prefix** `OS4S` (OpaqueShare 4 Streaming) is a
+- **Magic prefix** `OS4S` (Nduzem 4 Streaming) is a
   self-identifying byte marker so the receiver can hard-fail cleanly
   ("this looks like an M2-secretbox ciphertext, not M4-secretstream")
   rather than emit a mysterious decryption error. The 4 bytes are

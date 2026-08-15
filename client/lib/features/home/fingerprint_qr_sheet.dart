@@ -11,7 +11,7 @@ import '../../crypto/fingerprint.dart';
 ///   - any generic QR scanner (Signal, camera app, screenshot-and-decode),
 ///     which will surface a copyable string the recipient can paste into
 ///     our verify-contact screen;
-///   - a future opaqueshare-native scanner that will detect a 25-digit
+///   - a future nduzem-native scanner that will detect a 25-digit
 ///     numeric string and match without any URI-wrapping ceremony.
 ///
 /// The canonical form (no spaces) would be marginally smaller in the QR

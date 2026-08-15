@@ -1,8 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 
-import 'package:opaqueshare/features/verify_contact/verified_contacts_repo.dart';
-import 'package:opaqueshare/storage/secure_storage.dart';
+import 'package:nduzem/features/verify_contact/verified_contacts_repo.dart';
+import 'package:nduzem/storage/secure_storage.dart';
 
 class _FakeStore extends Mock implements SecureStore {}
 

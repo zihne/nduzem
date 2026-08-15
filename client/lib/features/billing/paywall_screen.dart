@@ -510,7 +510,7 @@ class _MobileAppNudgeCard extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(
-              'Install OpaqueShare on Android or iOS, sign in with the '
+              'Install Nduzem on Android or iOS, sign in with the '
               'same account, top up your credits there — the balance '
               'shows up here on your next page load.',
               style: theme.textTheme.bodySmall,

@@ -180,7 +180,7 @@ class SafStreamSavePlugin(private val activity: Activity) :
             return
         }
         val suggestedFilename =
-            call.argument<String>("suggestedFilename") ?: "opaqueshare"
+            call.argument<String>("suggestedFilename") ?: "nduzem"
         val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "application/octet-stream"
@@ -242,7 +242,7 @@ class SafStreamSavePlugin(private val activity: Activity) :
         // multi-second on multi-GB files. Result is reported back on
         // the main thread via runOnUiThread so Flutter's method
         // channel contract is satisfied.
-        thread(name = "opaqueshare-saf-copy") {
+        thread(name = "nduzem-saf-copy") {
             try {
                 FileInputStream(srcFile).use { input ->
                     val output = activity.contentResolver.openOutputStream(

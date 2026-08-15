@@ -49,7 +49,7 @@ class HomeScreen extends ConsumerWidget {
     final session = ref.watch(authSessionProvider);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('OpaqueShare'),
+        title: const Text('Nduzem'),
         actions: [
           // The account menu our published deletion policy tells users
           // to look for ("account menu → Settings → Delete my
@@ -252,7 +252,7 @@ class _FingerprintCard extends StatelessWidget {
                         'If you saved a recovery key, restore it below — '
                         'that installs the same key here, and files sent '
                         'to you will open.\n\n'
-                        'Without a recovery key, open OpaqueShare where '
+                        'Without a recovery key, open Nduzem where '
                         'the key already is. If that device is gone and '
                         'you have no recovery key, the key cannot be '
                         'brought back and files already sent cannot be '

@@ -484,7 +484,7 @@ class TransferService {
       final File? ciphertextFile = tempDir == null
           ? null
           : File(
-              '${tempDir.path}/opaqueshare-${FileCrypto.randomTempSlug()}.ct.tmp',
+              '${tempDir.path}/nduzem-${FileCrypto.randomTempSlug()}.ct.tmp',
             );
 
       try {
@@ -565,7 +565,7 @@ class TransferService {
                     'account, so this transfer cannot be decrypted here. '
                     'Keys are held by the browser you registered with and '
                     'are not shared between browsers or computers — open '
-                    'OpaqueShare in that browser to receive this file. If '
+                    'Nduzem in that browser to receive this file. If '
                     'you registered in this browser, its storage may have '
                     'been cleared, in which case the key cannot be '
                     'recovered and this transfer cannot be opened.'
@@ -859,7 +859,7 @@ class TransferService {
       final File? ciphertextFile = tempDir == null
           ? null
           : File(
-              '${tempDir.path}/opaqueshare-${FileCrypto.randomTempSlug()}.ct.tmp',
+              '${tempDir.path}/nduzem-${FileCrypto.randomTempSlug()}.ct.tmp',
             );
 
       try {
@@ -985,7 +985,7 @@ class TransferService {
     final basename = candidate.split(RegExp(r'[\\/]')).last;
     final cleaned = basename.replaceAll(RegExp(r'[^A-Za-z0-9._\- ]'), '_');
     if (cleaned.isEmpty || cleaned == '.' || cleaned == '..') {
-      return 'opaqueshare-$transferId';
+      return 'nduzem-$transferId';
     }
     return cleaned;
   }

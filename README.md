@@ -1,6 +1,6 @@
-# OpaqueShare — privacy-first file transfer (client)
+# Nduzem — privacy-first file transfer (client)
 
-OpaqueShare lets a sender transmit a file to a recipient such that **the
+Nduzem lets a sender transmit a file to a recipient such that **the
 server never holds keys or plaintext**. The operator can see who sent what
 to whom and how big the blob was, but cannot see the file contents,
 filename, or type. All cryptography happens on the user's device.
@@ -34,7 +34,7 @@ The backend (FastAPI conduit + infrastructure) is **not** open source.
 - The client crypto stack is classical (X25519 + Ed25519 + XChaCha20-Poly1305).
   A hybrid post-quantum suite is planned for v2; v1 is migration-ready via
   `crypto_suite` versioning.
-- We do describe OpaqueShare as **zero-knowledge**, and we mean something
+- We do describe Nduzem as **zero-knowledge**, and we mean something
   specific and narrow by it: the server never holds your keys or your
   plaintext, and cannot derive either. That is a claim about the
   architecture, and it is checkable — against the client source in this
@@ -70,7 +70,7 @@ Client source (this repository): **Apache-2.0** — see
 [LICENSE-client.md](LICENSE-client.md). The Apache patent grant covers
 contributors and downstream users.
 
-The OpaqueShare backend is proprietary and lives in a separate, private
+The Nduzem backend is proprietary and lives in a separate, private
 repository.
 
 ## Status

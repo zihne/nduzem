@@ -11,11 +11,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
-import 'package:opaqueshare/api/users_api.dart';
-import 'package:opaqueshare/features/auth/auth_providers.dart';
-import 'package:opaqueshare/features/auth/auth_repository.dart';
-import 'package:opaqueshare/features/auth/key_backup_screen.dart';
-import 'package:opaqueshare/features/home/home_screen.dart';
+import 'package:nduzem/api/users_api.dart';
+import 'package:nduzem/features/auth/auth_providers.dart';
+import 'package:nduzem/features/auth/auth_repository.dart';
+import 'package:nduzem/features/auth/key_backup_screen.dart';
+import 'package:nduzem/features/home/home_screen.dart';
 
 class _StubSession extends AuthNotifier {
   _StubSession(this._session);

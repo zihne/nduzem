@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:opaqueshare/core/recipient_query.dart';
+import 'package:nduzem/core/recipient_query.dart';
 
 void main() {
   group('RecipientQuery.parse', () {
@@ -56,9 +56,9 @@ void main() {
       // Local validation is deliberately absent — the server owns
       // address validation, and a stricter client regex would reject
       // addresses that are actually deliverable.
-      final q = RecipientQuery.parse('alice+opaqueshare@example.com');
+      final q = RecipientQuery.parse('alice+nduzem@example.com');
       expect(q!.isEmail, isTrue);
-      expect(q.value, 'alice+opaqueshare@example.com');
+      expect(q.value, 'alice+nduzem@example.com');
     });
 
     test('an @-prefixed address is treated as a handle, not an email', () {

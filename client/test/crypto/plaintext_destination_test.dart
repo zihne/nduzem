@@ -3,7 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:opaqueshare/crypto/plaintext_destination.dart';
+import 'package:nduzem/crypto/plaintext_destination.dart';
 
 /// Unit tests for the ADR-0013 Phase-5 `PlaintextDestination`
 /// abstraction. The mobile [FilePlaintextDestination] is the only

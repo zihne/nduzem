@@ -83,7 +83,7 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
       setState(() => _externalBaseDir = base?.path);
     } on Object {
       // Best-effort — the warning banner falls back to a generic
-      // "OpaqueShare folder" wording if we couldn't resolve.
+      // "Nduzem folder" wording if we couldn't resolve.
     }
   }
 
@@ -279,19 +279,19 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
   /// Fallback save path when SAF isn't available (iOS today) or the
   /// SAF write failed for a provider-side reason. Copies the plaintext
   /// temp file (streaming, via `File.copy`) into the app-external
-  /// files directory under an `OpaqueShare/` subfolder, then deletes
+  /// files directory under an `Nduzem/` subfolder, then deletes
   /// the source temp. Peak memory ≈ Dart I/O buffers.
   ///
   /// The destination path is user-visible under
-  /// `Android/data/<pkg>/files/OpaqueShare/` (Android) or
-  /// `On My iPhone > OpaqueShare` (iOS Files app). Not as slick as
+  /// `Android/data/<pkg>/files/Nduzem/` (Android) or
+  /// `On My iPhone > Nduzem` (iOS Files app). Not as slick as
   /// SAF but reliable for multi-GB receives.
   Future<String?> _saveToExternalStorage(DecryptedTransfer decrypted) async {
     final Directory? baseDir;
     try {
       // Android: `/storage/emulated/0/Android/data/<pkg>/files`.
       // iOS: throws — fall back to app-documents (visible via Files
-      // app under "On My iPhone > OpaqueShare").
+      // app under "On My iPhone > Nduzem").
       baseDir = Platform.isAndroid
           ? await getExternalStorageDirectory()
           : await getApplicationDocumentsDirectory();
@@ -305,7 +305,7 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
       );
       return null;
     }
-    final saveDir = Directory('${baseDir.path}/OpaqueShare');
+    final saveDir = Directory('${baseDir.path}/Nduzem');
     if (!await saveDir.exists()) {
       await saveDir.create(recursive: true);
     }
@@ -471,7 +471,7 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
                 _LargeFileWarning(
                   destinationPath: _externalBaseDir == null
                       ? null
-                      : '$_externalBaseDir/OpaqueShare/${_decrypted!.filename}',
+                      : '$_externalBaseDir/Nduzem/${_decrypted!.filename}',
                 ),
               ],
               const SizedBox(height: 16),
@@ -718,7 +718,7 @@ class _LargeFileWarning extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           SelectableText(
-            path ?? '(OpaqueShare folder under this app\'s external storage)',
+            path ?? '(Nduzem folder under this app\'s external storage)',
             style: TextStyle(
               color: scheme.onTertiaryContainer,
               fontSize: 11,

@@ -13,8 +13,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:opaqueshare/crypto/keys.dart';
-import 'package:opaqueshare/crypto/recovery_key.dart';
+import 'package:nduzem/crypto/keys.dart';
+import 'package:nduzem/crypto/recovery_key.dart';
 import 'package:sodium_libs/sodium_libs.dart';
 
 import 'sodium_test_support.dart';

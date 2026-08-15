@@ -7,9 +7,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:opaqueshare/features/auth/auth_repository.dart';
-import 'package:opaqueshare/features/auth/auth_providers.dart';
-import 'package:opaqueshare/features/auth/rotate_key_screen.dart';
+import 'package:nduzem/features/auth/auth_repository.dart';
+import 'package:nduzem/features/auth/auth_providers.dart';
+import 'package:nduzem/features/auth/rotate_key_screen.dart';
 
 Widget _harness({required bool mfaEnabled}) {
   return ProviderScope(

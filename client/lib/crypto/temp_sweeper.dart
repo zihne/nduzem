@@ -19,8 +19,8 @@ library;
 import 'dart:io';
 
 /// Filename shape written by the receive pipeline:
-/// `opaqueshare-<slug>.dec.tmp` (plaintext) and `.ct.tmp` (ciphertext).
-final RegExp _ourTempFile = RegExp(r'^opaqueshare-[a-z0-9]+\.(dec|ct)\.tmp$');
+/// `nduzem-<slug>.dec.tmp` (plaintext) and `.ct.tmp` (ciphertext).
+final RegExp _ourTempFile = RegExp(r'^nduzem-[a-z0-9]+\.(dec|ct)\.tmp$');
 
 /// Files younger than this are left alone. A receive in progress on this
 /// run owns its temp file, and deleting it mid-stream would break the

@@ -3,8 +3,8 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:opaqueshare/features/history/transfer_history_entry.dart';
-import 'package:opaqueshare/features/history/transfer_history_repository.dart';
+import 'package:nduzem/features/history/transfer_history_entry.dart';
+import 'package:nduzem/features/history/transfer_history_repository.dart';
 
 SentHistoryEntry _sent(String id, {DateTime? at}) => SentHistoryEntry(
       transferId: id,

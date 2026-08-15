@@ -5,7 +5,7 @@
 	<!--
 		Universal Links — the iOS counterpart to the autoVerify App Links
 		intent-filter in android/app/src/main/AndroidManifest.xml. Claims
-		the same three path prefixes under https://opaqueshare.com/ so an
+		the same three path prefixes under https://nduzem.com/ so an
 		email or share link opens the app when installed and falls back to
 		the branded web page otherwise:
 
@@ -37,7 +37,7 @@
 	-->
 	<key>com.apple.developer.associated-domains</key>
 	<array>
-		<string>applinks:opaqueshare.com</string>
+		<string>applinks:nduzem.com</string>
 	</array>
 </dict>
 </plist>

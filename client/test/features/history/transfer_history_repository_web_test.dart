@@ -4,8 +4,8 @@ library;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:web/web.dart' as web;
 
-import 'package:opaqueshare/features/history/transfer_history_entry.dart';
-import 'package:opaqueshare/features/history/transfer_history_repository_web.dart';
+import 'package:nduzem/features/history/transfer_history_entry.dart';
+import 'package:nduzem/features/history/transfer_history_repository_web.dart';
 
 /// Smoke tests for the web / localStorage variant of
 /// [TransferHistoryRepository]. `@TestOn('browser')` skips these on
@@ -48,13 +48,13 @@ void main() {
     final repo = TransferHistoryRepository(userId: null);
     await repo.log(sent('t-x'));
     expect(await repo.readAll(), isEmpty);
-    // Nothing landed in localStorage under any opaqueshare key.
+    // Nothing landed in localStorage under any nduzem key.
     final keys = <String>[];
     for (var i = 0; i < web.window.localStorage.length; i++) {
       final k = web.window.localStorage.key(i);
       if (k != null) keys.add(k);
     }
-    expect(keys.where((k) => k.startsWith('opaqueshare.')), isEmpty);
+    expect(keys.where((k) => k.startsWith('nduzem.')), isEmpty);
   });
 
   test('200-entry cap evicts the oldest', () async {
@@ -85,14 +85,14 @@ void main() {
     await repo.clearAll();
     expect(await repo.readAll(), isEmpty);
     expect(
-      web.window.localStorage.getItem('opaqueshare.history.u-clr'),
+      web.window.localStorage.getItem('nduzem.history.u-clr'),
       isNull,
     );
   });
 
   test('corrupt payload → readAll returns empty, does not throw', () async {
     web.window.localStorage.setItem(
-      'opaqueshare.history.u-bad',
+      'nduzem.history.u-bad',
       'this is not json',
     );
     final repo = TransferHistoryRepository(userId: 'u-bad');
@@ -101,7 +101,7 @@ void main() {
 
   test('future schema version → readAll returns empty', () async {
     web.window.localStorage.setItem(
-      'opaqueshare.history.u-fut',
+      'nduzem.history.u-fut',
       '{"schema_version": 999, "entries": []}',
     );
     final repo = TransferHistoryRepository(userId: 'u-fut');

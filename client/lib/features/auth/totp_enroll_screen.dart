@@ -98,7 +98,7 @@ class _TotpEnrollScreenState extends ConsumerState<TotpEnrollScreen> {
   Future<void> _openInAuthenticator(String otpauthUrl) async {
     final messenger = ScaffoldMessenger.of(context);
     // Goes through [launchExternalUri] so on Android the authenticator
-    // gets its own task and can be closed without dragging OpaqueShare
+    // gets its own task and can be closed without dragging Nduzem
     // with it.
     final result = await launchExternalUri(Uri.parse(otpauthUrl));
     if (result == ExternalLaunchResult.noHandler) {

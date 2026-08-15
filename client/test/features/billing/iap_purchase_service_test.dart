@@ -2,8 +2,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:in_app_purchase/in_app_purchase.dart';
 import 'package:mocktail/mocktail.dart';
 
-import 'package:opaqueshare/api/billing_api.dart';
-import 'package:opaqueshare/features/billing/iap_purchase_service.dart';
+import 'package:nduzem/api/billing_api.dart';
+import 'package:nduzem/features/billing/iap_purchase_service.dart';
 
 /// The IapPurchaseService's real Play-Billing path can't run inside a
 /// Dart-only test (no native plugin channel). But `Platform.isAndroid`

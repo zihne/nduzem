@@ -1,8 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 
-import 'package:opaqueshare/api/api_client.dart';
-import 'package:opaqueshare/api/auth_api.dart';
+import 'package:nduzem/api/api_client.dart';
+import 'package:nduzem/api/auth_api.dart';
 
 class _FakeClient extends Mock implements ApiClient {}
 
@@ -109,7 +109,7 @@ void main() {
       ).thenAnswer(
         (_) async => <String, dynamic>{
           'secret': 'JBSWY3DPEHPK3PXP',
-          'otpauth_url': 'otpauth://totp/OpaqueShare:a?secret=…',
+          'otpauth_url': 'otpauth://totp/Nduzem:a?secret=…',
         },
       );
 

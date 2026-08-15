@@ -12,20 +12,20 @@
 ///      URLs never trigger the in-app deep link.
 ///   2. `assetlinks.json` lives on the bare host — Android App
 ///      Links verification only checks that host.
-///   3. Users read URLs; `opaqueshare.com/r/…` looks like a link
-///      you'd want to tap. `api.opaqueshare.com/r/…` looks like a
+///   3. Users read URLs; `nduzem.com/r/…` looks like a link
+///      you'd want to tap. `api.nduzem.com/r/…` looks like a
 ///      developer accidentally pasted an internal URL.
 ///
 /// Dev setup:
 ///   flutter run \
-///     --dart-define=OPAQUESHARE_API_BASE=http://10.0.2.2:8000 \
-///     --dart-define=OPAQUESHARE_SHARE_URL_BASE=http://10.0.2.2:8000
+///     --dart-define=NDUZEM_API_BASE=http://10.0.2.2:8000 \
+///     --dart-define=NDUZEM_SHARE_URL_BASE=http://10.0.2.2:8000
 ///     (Android emulator — API + share both go to the same dev host)
 ///
 /// Release build (see `scripts/build-release.sh`):
 ///   flutter build appbundle --release \
-///     --dart-define=OPAQUESHARE_API_BASE=https://api.opaqueshare.com \
-///     --dart-define=OPAQUESHARE_SHARE_URL_BASE=https://opaqueshare.com
+///     --dart-define=NDUZEM_API_BASE=https://api.nduzem.com \
+///     --dart-define=NDUZEM_SHARE_URL_BASE=https://nduzem.com
 class AppConfig {
   const AppConfig({required this.apiBaseUrl, required this.shareUrlBase});
 
@@ -33,7 +33,7 @@ class AppConfig {
   final Uri apiBaseUrl;
 
   /// Where user-facing share URLs (`/r/<id>#<K_file>`) point. Usually
-  /// the bare host (`opaqueshare.com`), NOT the `api.` subdomain.
+  /// the bare host (`nduzem.com`), NOT the `api.` subdomain.
   /// See class docstring for why.
   final Uri shareUrlBase;
 
@@ -56,11 +56,11 @@ class AppConfig {
   /// first request.
   static AppConfig fromEnv() {
     const rawApi = String.fromEnvironment(
-      'OPAQUESHARE_API_BASE',
+      'NDUZEM_API_BASE',
       defaultValue: 'http://10.0.2.2:8000',
     );
     const rawShare = String.fromEnvironment(
-      'OPAQUESHARE_SHARE_URL_BASE',
+      'NDUZEM_SHARE_URL_BASE',
       defaultValue: '',
     );
     final apiBaseUrl = Uri.parse(rawApi);
@@ -76,7 +76,7 @@ class AppConfig {
   }
 
   /// Strip a leading `api.` from `apiBaseUrl`'s host if present.
-  /// `https://api.opaqueshare.com` → `https://opaqueshare.com`.
+  /// `https://api.nduzem.com` → `https://nduzem.com`.
   /// `http://localhost:8000` → unchanged (no `api.` prefix).
   static Uri _deriveShareUrlBase(Uri apiBase) {
     final host = apiBase.host;

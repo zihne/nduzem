@@ -16,12 +16,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
-import 'package:opaqueshare/api/users_api.dart';
-import 'package:opaqueshare/core/config.dart';
-import 'package:opaqueshare/features/auth/auth_providers.dart';
-import 'package:opaqueshare/features/auth/auth_repository.dart';
-import 'package:opaqueshare/features/auth/register_screen.dart';
-import 'package:opaqueshare/features/settings/settings_screen.dart';
+import 'package:nduzem/api/users_api.dart';
+import 'package:nduzem/core/config.dart';
+import 'package:nduzem/features/auth/auth_providers.dart';
+import 'package:nduzem/features/auth/auth_repository.dart';
+import 'package:nduzem/features/auth/register_screen.dart';
+import 'package:nduzem/features/settings/settings_screen.dart';
 
 class _StubSession extends AuthNotifier {
   _StubSession(this._session);
@@ -32,8 +32,8 @@ class _StubSession extends AuthNotifier {
 }
 
 final _config = AppConfig(
-  apiBaseUrl: Uri.parse('https://api.opaqueshare.com'),
-  shareUrlBase: Uri.parse('https://opaqueshare.com'),
+  apiBaseUrl: Uri.parse('https://api.nduzem.com'),
+  shareUrlBase: Uri.parse('https://nduzem.com'),
 );
 
 Widget _wrap(Widget child, {AuthSession? session}) => ProviderScope(
@@ -92,7 +92,7 @@ void main() {
     Uri resolve(String file) => _config.legalPage(file);
 
     test('point at the marketing origin, not the API origin', () {
-      expect(resolve('privacy.html').host, 'opaqueshare.com');
+      expect(resolve('privacy.html').host, 'nduzem.com');
       expect(resolve('privacy.html').host, isNot(startsWith('api.')));
     });
 
@@ -100,13 +100,13 @@ void main() {
       // The exact bug that shipped: `'/\$file'` produces `/$file`.
       final uri = resolve('terms.html');
       expect(uri.path, '/terms.html');
-      expect(uri.toString(), 'https://opaqueshare.com/terms.html');
+      expect(uri.toString(), 'https://nduzem.com/terms.html');
       expect(uri.toString(), isNot(contains(r'$')));
     });
 
     test('cover every document the pages actually serve', () {
       for (final f in ['privacy.html', 'terms.html', 'account-deletion.html']) {
-        expect(resolve(f).toString(), 'https://opaqueshare.com/$f');
+        expect(resolve(f).toString(), 'https://nduzem.com/$f');
       }
     });
   });

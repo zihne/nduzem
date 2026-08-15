@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>OpaqueShare</string>
+	<string>Nduzem</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -15,7 +15,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>OpaqueShare</string>
+	<string>Nduzem</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -72,7 +72,7 @@
 		link_receive_screen.dart routes there because SAF (ADR-0008) is
 		Android-only. Documents is invisible to the user unless BOTH keys
 		below are set: the app then shows up in Files as
-		"On My iPhone > OpaqueShare" and the decrypted file is reachable.
+		"On My iPhone > Nduzem" and the decrypted file is reachable.
 		Without them the receive completes and the file is unrecoverable.
 	-->
 	<key>UIFileSharingEnabled</key>
@@ -106,9 +106,9 @@
 		a user does reach a photo through the document picker.
 	-->
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>OpaqueShare needs access only when you pick a photo or video to send. The file is encrypted on this device before it is uploaded — the server never sees its contents.</string>
+	<string>Nduzem needs access only when you pick a photo or video to send. The file is encrypted on this device before it is uploaded — the server never sees its contents.</string>
 	<!--
-		Export compliance. OpaqueShare's primary function is encryption
+		Export compliance. Nduzem's primary function is encryption
 		(X25519 / Ed25519 / XChaCha20-Poly1305 via libsodium), so it does
 		NOT qualify for the Category 5 Part 2 exemptions Apple asks about
 		— answering "false" here would be a false declaration.

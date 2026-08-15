@@ -16,7 +16,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:opaqueshare/features/auth/register_screen.dart';
+import 'package:nduzem/features/auth/register_screen.dart';
 
 void main() {
   Future<void> pumpRegister(WidgetTester tester) async {

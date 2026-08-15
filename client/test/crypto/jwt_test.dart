@@ -1,7 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:opaqueshare/crypto/jwt.dart';
+import 'package:nduzem/crypto/jwt.dart';
 
 /// Build a JWT with a controlled payload. The signature segment doesn't
 /// have to be valid — the client-side helper is decode-only (the server

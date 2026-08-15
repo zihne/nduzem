@@ -71,7 +71,7 @@ client/lib/
 M2 will add `features/send/`, `features/inbox/`, etc. The `features/`
 split keeps each milestone's changes local.
 
-**Backend URL** comes from `--dart-define=OPAQUESHARE_API_BASE=…`. Default
+**Backend URL** comes from `--dart-define=NDUZEM_API_BASE=…`. Default
 `http://10.0.2.2:8000` matches the Android emulator loopback; iOS
 simulator uses `http://localhost:8000`. Bare-metal builds must supply
 the value at compile time.

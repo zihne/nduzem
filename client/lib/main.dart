@@ -9,7 +9,7 @@ import 'app.dart';
 import 'crypto/temp_sweeper.dart';
 import 'storage/persistent_storage.dart';
 
-/// OpaqueShare Flutter client.
+/// Nduzem Flutter client.
 ///
 /// Crypto is client-side (libsodium via `sodium_libs`). Private keys never
 /// leave the device (`flutter_secure_storage`). Open-source under Apache-2.0
@@ -49,5 +49,5 @@ void main() {
     // nothing on screen depends on the answer.
     unawaited(requestPersistentStorage());
   }
-  runApp(const ProviderScope(child: OpaqueShareApp()));
+  runApp(const ProviderScope(child: NduzemApp()));
 }

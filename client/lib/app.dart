@@ -3,14 +3,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'router.dart';
 
-class OpaqueShareApp extends ConsumerWidget {
-  const OpaqueShareApp({super.key});
+class NduzemApp extends ConsumerWidget {
+  const NduzemApp({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final router = ref.watch(routerProvider);
     return MaterialApp.router(
-      title: 'OpaqueShare',
+      title: 'Nduzem',
       theme: ThemeData(
         useMaterial3: true,
         // Seeded palette for the full ColorScheme (surface, secondary,

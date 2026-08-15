@@ -2,7 +2,7 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:opaqueshare/crypto/fingerprint.dart';
+import 'package:nduzem/crypto/fingerprint.dart';
 
 void main() {
   group('fingerprintOf', () {
