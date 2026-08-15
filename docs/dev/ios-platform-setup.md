@@ -57,8 +57,8 @@ Point at a backend the same way as the web app:
 
 ```bash
 flutter run -d "iPhone 17" \
-  --dart-define=OPAQUESHARE_API_BASE=http://localhost:8000 \
-  --dart-define=OPAQUESHARE_SHARE_URL_BASE=http://localhost:8000
+  --dart-define=NDUZEM_API_BASE=http://localhost:8000 \
+  --dart-define=NDUZEM_SHARE_URL_BASE=http://localhost:8000
 ```
 
 **The `--dart-define`s are effectively mandatory on iOS.** The default in
@@ -117,7 +117,7 @@ These are the items nothing in the repo can satisfy on its own.
 
 ### 1. Export compliance (blocks submission)
 
-`ITSAppUsesNonExemptEncryption` is `true` — OpaqueShare's primary
+`ITSAppUsesNonExemptEncryption` is `true` — Nduzem's primary
 function is encryption, so it does not qualify for the Category 5 Part 2
 exemptions, and answering otherwise would be a false declaration.
 
@@ -130,7 +130,7 @@ is a form, not an audit.
 ### 2. Universal links (two steps, both required)
 
 Configured in `ios/Runner/Runner.entitlements` as
-`applinks:opaqueshare.com`, but inert until:
+`applinks:nduzem.com`, but inert until:
 
 1. **Associated Domains capability** enabled for `com.opaqueshare.app`
    in the Apple Developer portal, and the provisioning profile
@@ -143,7 +143,7 @@ Verify after deploying — iOS fetches the AASA at install time and gives
 no error when it fails:
 
 ```bash
-curl -sI https://opaqueshare.com/.well-known/apple-app-site-association \
+curl -sI https://nduzem.com/.well-known/apple-app-site-association \
   | grep -i content-type          # must be application/json, no redirect
 ```
 
@@ -179,10 +179,10 @@ billing must use Android.
 
 SAF stream-save (ADR-0008) is Android-only. On iOS, `_saveLargeFile`
 falls through to `_saveToExternalStorage`, which copies the plaintext
-into the app's Documents directory under `OpaqueShare/`. Thanks to
+into the app's Documents directory under `Nduzem/`. Thanks to
 `UIFileSharingEnabled` + `LSSupportsOpeningDocumentsInPlace`, that
 directory is reachable in the Files app as **On My iPhone >
-OpaqueShare** — but the user does not get to choose the destination the
+Nduzem** — but the user does not get to choose the destination the
 way an Android user does. A native `UIDocumentPickerViewController`
 export path would close the gap; not scoped yet.
 

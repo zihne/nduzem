@@ -62,14 +62,14 @@ host with the app's SHA-256 signing fingerprint — that's how Android
 "knows" the app should intercept the URL instead of falling through
 to the browser.
 
-For v1 the manifest ships `opaqueshare.com` as a placeholder, with a
+For v1 the manifest ships `nduzem.com` as a placeholder, with a
 comment explaining the operator must swap it for their actual host
 and deploy `assetlinks.json`. Universal Links fail open — tapping
 the URL when the app isn't verified for that host just opens the
 browser, which lands on the JS page as before. Nothing breaks; the
 app just doesn't intercept.
 
-**No custom scheme** (`opaqueshare://...`) — custom schemes work
+**No custom scheme** (`nduzem://...`) — custom schemes work
 but split the "share this URL" surface (recipient without the app
 would see a broken link if the sender used the custom-scheme URL).
 The universal-link approach gives us one URL that works whether the
@@ -190,7 +190,7 @@ brute-force floor for the password field.
 
 ## Alternatives considered
 
-- **Custom scheme** (`opaqueshare://r/<id>#<K>`). No domain
+- **Custom scheme** (`nduzem://r/<id>#<K>`). No domain
   verification needed, works out of the box for testing. Rejected
   because the sender's URL then has to either (a) commit to the
   custom scheme and break for recipients without the app, or (b)

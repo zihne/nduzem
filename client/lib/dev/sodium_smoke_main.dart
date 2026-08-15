@@ -1,7 +1,7 @@
 /// sodium_libs peak-memory smoke test on Flutter web.
 ///
 /// **Purpose** (per docs/roadmap/2026-scale-to-business.md Workstream 3):
-/// answer the go/no-go question for shipping OpaqueShare's web app on
+/// answer the go/no-go question for shipping Nduzem's web app on
 /// Flutter web with libsodium.js — specifically, whether we can push a
 /// multi-GB plaintext through `crypto_secretstream_xchacha20poly1305`
 /// via `sodium_libs`' `pushChunked` and keep peak JS heap **bounded by
@@ -69,7 +69,7 @@ class _SmokeApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'sodium_libs smoke — OpaqueShare',
+      title: 'sodium_libs smoke — Nduzem',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         useMaterial3: true,

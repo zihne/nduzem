@@ -1,6 +1,6 @@
 # `client/scripts/`
 
-Operator scripts for producing distributable OpaqueShare client
+Operator scripts for producing distributable Nduzem client
 artefacts. Intended for local + CI use; not shipped in the app.
 
 ## `build-release.sh`
@@ -10,13 +10,13 @@ inline. Run from anywhere; the script `cd`s to the client repo root
 itself.
 
 ```bash
-scripts/build-release.sh https://api.opaqueshare.com
+scripts/build-release.sh https://api.nduzem.com
 ```
 
 Or with the URL in an env var:
 
 ```bash
-OPAQUESHARE_API_BASE=https://api.opaqueshare.com scripts/build-release.sh
+NDUZEM_API_BASE=https://api.nduzem.com scripts/build-release.sh
 ```
 
 ### What it checks, in order
@@ -63,7 +63,7 @@ If `android/key.properties` doesn't exist yet:
 
 ```bash
 keytool -genkey -v \
-  -keystore ~/opaqueshare-upload.jks \
+  -keystore ~/nduzem-upload.jks \
   -keyalg RSA -keysize 2048 -validity 10000 \
   -alias upload
 

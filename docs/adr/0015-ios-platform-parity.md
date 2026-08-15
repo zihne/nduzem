@@ -23,7 +23,7 @@ bugs** that would have shipped:
 1. **Received files were unreachable.** On iOS, `_saveToExternalStorage`
    (receive_screen.dart, link_receive_screen.dart) copies the decrypted
    plaintext into `getApplicationDocumentsDirectory()`. The code comment
-   claims the result is visible "under `On My iPhone > OpaqueShare`" in
+   claims the result is visible "under `On My iPhone > Nduzem`" in
    the Files app. That is only true when `UIFileSharingEnabled` **and**
    `LSSupportsOpeningDocumentsInPlace` are both set. Neither was. Every
    large-file receive on iOS would have reported success and left the
@@ -63,7 +63,7 @@ analysis rejects binaries that link photo APIs without a purpose string
 honestly for the case where a user reaches a photo through the document
 picker.
 
-`ITSAppUsesNonExemptEncryption` is `true`, not `false`. OpaqueShare's
+`ITSAppUsesNonExemptEncryption` is `true`, not `false`. Nduzem's
 primary function *is* encryption, so it does not qualify for the
 Category 5 Part 2 exemptions the App Store Connect questionnaire asks
 about; answering `false` would be a false declaration. The consequence
@@ -76,7 +76,7 @@ before the first submission.
 
 New `ios/Runner/Runner.entitlements`, wired into all three Runner build
 configurations via `CODE_SIGN_ENTITLEMENTS`, claiming
-`applinks:opaqueshare.com`.
+`applinks:nduzem.com`.
 
 iOS and Android split the claim differently. The Android manifest
 enumerates path prefixes inline; iOS claims only the **host** in the

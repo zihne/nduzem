@@ -1,7 +1,7 @@
 # sodium_libs peak-memory smoke test (Flutter web)
 
 The go/no-go probe for [Workstream 3 of the scale-to-business
-roadmap](../../../opaqueshare-server/docs/roadmap/2026-scale-to-business.md).
+roadmap](../../../nduzem-server/docs/roadmap/2026-scale-to-business.md).
 Answers one question: **can we push multi-GB plaintext through
 `sodium_libs`' `pushChunked` on Flutter web while keeping peak JS heap
 bounded by chunk size, not by total plaintext size?**

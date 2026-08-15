@@ -1,7 +1,7 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:opaqueshare/native/saf_saver.dart';
+import 'package:nduzem/native/saf_saver.dart';
 
 /// Round-trips against the SAF plugin's method channel using
 /// Flutter's `TestDefaultBinaryMessengerBinding`. We stand in for the

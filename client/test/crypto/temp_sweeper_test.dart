@@ -1,7 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:opaqueshare/crypto/temp_sweeper.dart';
+import 'package:nduzem/crypto/temp_sweeper.dart';
 
 /// The sweeper exists because `dispose()` does not run when the process
 /// is killed, so a decrypted plaintext can outlive the app in the cache
@@ -28,7 +28,7 @@ void main() {
 
   test('deletes a stale decrypted-plaintext temp', () async {
     final f = await write(
-      'opaqueshare-a1b2c3.dec.tmp',
+      'nduzem-a1b2c3.dec.tmp',
       age: const Duration(hours: 3),
     );
     final n = await sweepStaleTemps(dir);
@@ -38,7 +38,7 @@ void main() {
 
   test('deletes a stale ciphertext temp too', () async {
     final f = await write(
-      'opaqueshare-deadbeef.ct.tmp',
+      'nduzem-deadbeef.ct.tmp',
       age: const Duration(hours: 3),
     );
     await sweepStaleTemps(dir);
@@ -48,7 +48,7 @@ void main() {
   test('leaves a fresh temp alone — a receive may be using it', () async {
     // The failure this prevents is worse than the leak it fixes:
     // deleting a temp mid-stream breaks a transfer in progress.
-    final f = await write('opaqueshare-inflight.dec.tmp');
+    final f = await write('nduzem-inflight.dec.tmp');
     final n = await sweepStaleTemps(dir);
     expect(n, 0);
     expect(await f.exists(), isTrue);
@@ -59,10 +59,10 @@ void main() {
     // exact naming scheme must be untouchable.
     final others = <File>[
       await write('important.txt', age: const Duration(days: 9)),
-      await write('opaqueshare-notes.txt', age: const Duration(days: 9)),
+      await write('nduzem-notes.txt', age: const Duration(days: 9)),
       await write('other-app-abc.dec.tmp', age: const Duration(days: 9)),
-      await write('opaqueshare-.dec.tmp', age: const Duration(days: 9)),
-      await write('opaqueshare-abc.dec.tmp.bak', age: const Duration(days: 9)),
+      await write('nduzem-.dec.tmp', age: const Duration(days: 9)),
+      await write('nduzem-abc.dec.tmp.bak', age: const Duration(days: 9)),
     ];
     final n = await sweepStaleTemps(dir);
     expect(n, 0, reason: 'matched something outside our naming scheme');
@@ -78,22 +78,22 @@ void main() {
 
   test('sweeps several and reports the count', () async {
     for (var i = 0; i < 4; i++) {
-      await write('opaqueshare-f$i.dec.tmp', age: const Duration(hours: 5));
+      await write('nduzem-f$i.dec.tmp', age: const Duration(hours: 5));
     }
-    await write('opaqueshare-keep.dec.tmp');
+    await write('nduzem-keep.dec.tmp');
     expect(await sweepStaleTemps(dir), 4);
   });
 
   test('the age cutoff is honoured exactly', () async {
     final now = DateTime.now();
-    await write('opaqueshare-old.dec.tmp', age: const Duration(minutes: 61));
-    await write('opaqueshare-new.dec.tmp', age: const Duration(minutes: 59));
+    await write('nduzem-old.dec.tmp', age: const Duration(minutes: 61));
+    await write('nduzem-new.dec.tmp', age: const Duration(minutes: 59));
     final n = await sweepStaleTemps(
       dir,
       now: now,
       olderThan: const Duration(hours: 1),
     );
     expect(n, 1);
-    expect(File('${dir.path}/opaqueshare-new.dec.tmp').existsSync(), isTrue);
+    expect(File('${dir.path}/nduzem-new.dec.tmp').existsSync(), isTrue);
   });
 }

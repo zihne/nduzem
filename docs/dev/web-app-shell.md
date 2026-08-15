@@ -1,6 +1,6 @@
 # Web app — status + deployment
 
-Companion to the [scale-to-business roadmap Workstream 3](../../../opaqueshare-server/docs/roadmap/2026-scale-to-business.md).
+Companion to the [scale-to-business roadmap Workstream 3](../../../nduzem-server/docs/roadmap/2026-scale-to-business.md).
 Started as the `feat/web-app-shell` handover; now covers everything
 that landed through Phase 7 + the deploy plumbing.
 
@@ -29,16 +29,16 @@ Cross-browser QA checklist for what to verify by hand on each browser:
 
 Web bundle compiles on your dev machine and `rsync`s to the prod
 box. Caddy on the server serves the static files at
-`https://app.opaqueshare.com`. **Nothing Flutter-related runs on the
+`https://app.nduzem.com`. **Nothing Flutter-related runs on the
 server** — just the existing Caddy container.
 
 ### One-time setup
 
-1. **DNS** — A / AAAA record for `app.opaqueshare.com` pointing at
+1. **DNS** — A / AAAA record for `app.nduzem.com` pointing at
    the prod box. ACME provisions the cert on the first HTTPS request
    once DNS resolves.
 2. **CORS** — the api service's `CORS_ALLOWED_ORIGINS` env must
-   include `https://app.opaqueshare.com`. Already in
+   include `https://app.nduzem.com`. Already in
    `infra/docker/.env.prod.example` on the server repo; check your
    actual `.env.prod` on the box.
 3. **Caddy reload** — the first time the `app.` vhost lands on the
@@ -54,12 +54,12 @@ server** — just the existing Caddy container.
 # On your dev machine
 cd client
 scripts/build-web-release.sh \
-  https://api.opaqueshare.com \
-  https://opaqueshare.com
+  https://api.nduzem.com \
+  https://nduzem.com
 
 # Push to prod (Caddy serves the new files immediately — bind-mount)
 rsync -av --delete build/web/ \
-  prod:/opt/opaqueshare-server/infra/www-app/
+  prod:/opt/nduzem-server/infra/www-app/
 ```
 
 [`scripts/build-web-release.sh`](../../client/scripts/build-web-release.sh)
@@ -68,9 +68,9 @@ the exact `rsync` command to copy for step 2. Mirrors the mobile
 `build-release.sh` pattern.
 
 The rsync target path assumes the server repo lives at
-`/opt/opaqueshare-server/` on the box. Adjust for your actual
+`/opt/nduzem-server/` on the box. Adjust for your actual
 clone location. The bind-mount source is
-[`infra/www-app/`](../../../opaqueshare-server/infra/www-app/README.md)
+[`infra/www-app/`](../../../nduzem-server/infra/www-app/README.md)
 in the server repo (see the README there for the same workflow from
 the server-repo perspective).
 
@@ -79,7 +79,7 @@ the server-repo perspective).
 ### Storage is per-origin
 
 `flutter_secure_storage_web` and the transfer-history localStorage
-both live under the `app.opaqueshare.com` origin. A user signed in
+both live under the `app.nduzem.com` origin. A user signed in
 on the web has NO shared state with themselves on mobile.
 
 Practical consequence: **first web login is always "fresh device"**
@@ -93,8 +93,8 @@ scope; not v1.
 
 ### Link-mode receive at `/r/:transferId`
 
-`app.opaqueshare.com/r/<id>` is a redundant route today — shared
-links point at `opaqueshare.com/r/<id>` (marketing domain) which
+`app.nduzem.com/r/<id>` is a redundant route today — shared
+links point at `nduzem.com/r/<id>` (marketing domain) which
 serves the server-rendered web decrypt page (server ADR-0035). The
 Flutter web app's link-receive path works, but users won't naturally
 land on it. Not a bug, just a routing overlap to be aware of.
@@ -117,8 +117,8 @@ or migrate to a `package:web`-based storage plugin.
 ```bash
 cd client
 flutter run -d chrome --web-port=5173 --target=lib/main.dart \
-  --dart-define=OPAQUESHARE_API_BASE=http://localhost:8000 \
-  --dart-define=OPAQUESHARE_SHARE_URL_BASE=http://localhost:8000
+  --dart-define=NDUZEM_API_BASE=http://localhost:8000 \
+  --dart-define=NDUZEM_SHARE_URL_BASE=http://localhost:8000
 ```
 
 Pin `--web-port=5173` (or 5000 / 8080) — the dev backend's CORS

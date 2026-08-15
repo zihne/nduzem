@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# build-ios-release.sh — build a TestFlight/App-Store-ready OpaqueShare
+# build-ios-release.sh — build a TestFlight/App-Store-ready Nduzem
 # IPA with every pre- and post-flight check inline. iOS counterpart to
 # build-release.sh (Android AAB) and build-web-release.sh.
 #
@@ -28,10 +28,10 @@
 # non-zero exit is a hard failure with a message explaining what to fix.
 #
 # Usage:
-#   scripts/build-ios-release.sh [OPAQUESHARE_API_BASE] [SHARE_URL_BASE]
+#   scripts/build-ios-release.sh [NDUZEM_API_BASE] [SHARE_URL_BASE]
 #
 # Or via env var:
-#   OPAQUESHARE_API_BASE=https://api.opaqueshare.com scripts/build-ios-release.sh
+#   NDUZEM_API_BASE=https://api.nduzem.com scripts/build-ios-release.sh
 #
 # Optional env:
 #   IOS_EXPORT_METHOD        app-store (default) | ad-hoc | development
@@ -94,23 +94,23 @@ set -- ${POSITIONAL[@]+"${POSITIONAL[@]}"}
 [[ "$DO_UPLOAD" -eq 1 ]] && DO_VALIDATE=1
 
 # --- resolve arguments -----------------------------------------------
-API_BASE="${1:-${OPAQUESHARE_API_BASE:-}}"
+API_BASE="${1:-${NDUZEM_API_BASE:-}}"
 if [[ -z "$API_BASE" ]]; then
-    fail "OPAQUESHARE_API_BASE is required.
+    fail "NDUZEM_API_BASE is required.
 
 Usage:
   scripts/build-ios-release.sh <API_BASE> [SHARE_URL_BASE] [--validate] [--upload]
 
 Examples:
   # build only — the default, does not contact Apple
-  scripts/build-ios-release.sh https://api.opaqueshare.com
+  scripts/build-ios-release.sh https://api.nduzem.com
 
   # build, then ask App Store Connect whether it would accept it
-  scripts/build-ios-release.sh https://api.opaqueshare.com --validate
+  scripts/build-ios-release.sh https://api.nduzem.com --validate
 
   # build, validate, then actually deliver to TestFlight/App Store
   ASC_KEY_ID=ABCD123456 ASC_ISSUER_ID=69a6de70-… \\
-    scripts/build-ios-release.sh https://api.opaqueshare.com --upload"
+    scripts/build-ios-release.sh https://api.nduzem.com --upload"
 fi
 
 case "$API_BASE" in
@@ -122,17 +122,17 @@ esac
 # Share URL base — where link-mode share URLs point. Falls back to
 # stripping `api.` from the API host, matching AppConfig's own
 # derivation and build-release.sh.
-SHARE_URL_BASE="${2:-${OPAQUESHARE_SHARE_URL_BASE:-}}"
+SHARE_URL_BASE="${2:-${NDUZEM_SHARE_URL_BASE:-}}"
 if [[ -z "$SHARE_URL_BASE" ]]; then
     # NOT `${API_BASE/\/\/api./\/\/}` — bash keeps the backslashes in the
     # replacement half of a pattern substitution, so that yields
-    # `https:\/\/opaqueshare.com`, which then fails the validation below
+    # `https:\/\/nduzem.com`, which then fails the validation below
     # with a baffling message. build-release.sh carried that bug too.
     SHARE_URL_BASE="$(printf '%s' "$API_BASE" | sed 's|//api\.|//|')"
     if [[ "$SHARE_URL_BASE" == "$API_BASE" ]]; then
         warn "Could not derive a share URL base from API base — no 'api.' prefix.
 Falling back to the API base as the share host. Set
-OPAQUESHARE_SHARE_URL_BASE explicitly if this is wrong for your setup."
+NDUZEM_SHARE_URL_BASE explicitly if this is wrong for your setup."
     fi
 fi
 
@@ -369,8 +369,8 @@ say "  Export:     ${EXPORT_PLIST:-$EXPORT_METHOD}"
 
 BUILD_ARGS=(
     --release
-    --dart-define=OPAQUESHARE_API_BASE="$API_BASE"
-    --dart-define=OPAQUESHARE_SHARE_URL_BASE="$SHARE_URL_BASE"
+    --dart-define=NDUZEM_API_BASE="$API_BASE"
+    --dart-define=NDUZEM_SHARE_URL_BASE="$SHARE_URL_BASE"
 )
 if [[ -n "$EXPORT_PLIST" ]]; then
     [[ -f "$EXPORT_PLIST" ]] || fail "IOS_EXPORT_OPTIONS_PLIST does not exist: $EXPORT_PLIST"

@@ -340,7 +340,7 @@ class _LinkReceiveScreenState extends ConsumerState<LinkReceiveScreen> {
       );
       return null;
     }
-    final saveDir = Directory('${baseDir.path}/OpaqueShare');
+    final saveDir = Directory('${baseDir.path}/Nduzem');
     if (!await saveDir.exists()) {
       await saveDir.create(recursive: true);
     }
@@ -626,7 +626,7 @@ class _LinkReceiveScreenState extends ConsumerState<LinkReceiveScreen> {
         _IosLargeFileNotice(
           destinationPath: _externalBaseDir == null
               ? null
-              : '$_externalBaseDir/OpaqueShare/${decrypted.filename}',
+              : '$_externalBaseDir/Nduzem/${decrypted.filename}',
         ),
       ],
       const SizedBox(height: 16),

@@ -4,8 +4,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
-import 'package:opaqueshare/api/api_client.dart';
-import 'package:opaqueshare/core/config.dart';
+import 'package:nduzem/api/api_client.dart';
+import 'package:nduzem/core/config.dart';
 
 /// Test double that never has a token — we only exercise unauthed paths.
 class _NoToken implements TokenSource {

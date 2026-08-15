@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:opaqueshare/crypto/envelope.dart';
+import 'package:nduzem/crypto/envelope.dart';
 
 import 'sodium_test_support.dart';
 

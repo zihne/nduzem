@@ -57,7 +57,7 @@ class FilePlaintextDestination implements PlaintextDestination {
   static Future<FilePlaintextDestination> newTempFile(Directory tempDir) async {
     if (!await tempDir.exists()) await tempDir.create(recursive: true);
     final file = File(
-      '${tempDir.path}/opaqueshare-${FileCrypto.randomTempSlug()}.dec.tmp',
+      '${tempDir.path}/nduzem-${FileCrypto.randomTempSlug()}.dec.tmp',
     );
     return FilePlaintextDestination._(file.path, file.openWrite());
   }

@@ -5,8 +5,8 @@ import 'package:crypto/crypto.dart' as dart_crypto;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sodium_libs/sodium_libs.dart';
 
-import 'package:opaqueshare/crypto/file_crypto.dart';
-import 'package:opaqueshare/crypto/plaintext_source.dart';
+import 'package:nduzem/crypto/file_crypto.dart';
+import 'package:nduzem/crypto/plaintext_source.dart';
 import 'sodium_test_support.dart';
 
 /// M4 ciphertext-format tests (ADR-0003).

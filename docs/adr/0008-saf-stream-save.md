@@ -16,7 +16,7 @@ The **save** step still routes through
 accepts bytes only — no path-based streaming API.
 
 ADR-0006 shipped a fallback (`_saveToExternalStorage`) that copies
-the plaintext temp file into `Android/data/<pkg>/files/OpaqueShare/`
+the plaintext temp file into `Android/data/<pkg>/files/Nduzem/`
 via `File.copy` (streaming). It works for multi-GB files but the
 destination is:
 
@@ -51,7 +51,7 @@ Open questions:
 ### Split channel: `pickSaveUri` + `writeFileToUri`
 
 Two round-trips over one method channel
-(`com.opaqueshare.opaqueshare/saf_stream_save`):
+(`com.opaqueshare.nduzem/saf_stream_save`):
 
 - `pickSaveUri(suggestedFilename: String) -> String?` launches
   `ACTION_CREATE_DOCUMENT` via `startActivityForResult` +
@@ -152,7 +152,7 @@ override with a fake.
 
 - **Multi-GB receives now save to a real, user-picked location** —
   Downloads folder, Google Drive, external SD, whatever SAF exposes.
-  The buried `Android/data/…/OpaqueShare/` path is no longer the
+  The buried `Android/data/…/Nduzem/` path is no longer the
   destination for large files (it's still the fallback).
 - **One new Kotlin class + minimal MainActivity change.** The
   plugin registers on `configureFlutterEngine` per Flutter's

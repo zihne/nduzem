@@ -2,7 +2,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 
-import 'package:opaqueshare/storage/secure_storage.dart';
+import 'package:nduzem/storage/secure_storage.dart';
 
 class _FakeBackend extends Mock implements FlutterSecureStorage {}
 

@@ -16,7 +16,7 @@ import 'transfer_history_entry.dart';
 /// synchronous key/value shape needs a fraction of the code that
 /// IndexedDB's transactional/versioned API demands.
 ///
-/// One key per signed-in user, `opaqueshare.history.<userId>`,
+/// One key per signed-in user, `nduzem.history.<userId>`,
 /// holds that user's JSON list. Same 200-entry cap + schema
 /// versioning as the mobile impl so the History screen renders the
 /// same shape on both platforms.
@@ -44,7 +44,7 @@ class TransferHistoryRepository {
   static const int _schemaVersion = 1;
 
   static String _storageKeyFor(String userId) =>
-      'opaqueshare.history.$userId';
+      'nduzem.history.$userId';
 
   web.Storage get _store => web.window.localStorage;
 

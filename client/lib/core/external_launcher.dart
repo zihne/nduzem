@@ -11,13 +11,13 @@ import 'package:url_launcher/url_launcher.dart';
 enum ExternalLaunchResult { ok, noHandler }
 
 /// Launch an external URI (e.g. `otpauth://…`) in a way that leaves the
-/// target app **independent of OpaqueShare's task stack**.
+/// target app **independent of Nduzem's task stack**.
 ///
 /// Why this exists: `url_launcher` on Android only attaches
 /// `FLAG_ACTIVITY_NEW_TASK`. Under our MainActivity's empty task
 /// affinity, that flag isn't enough — the target activity gets stacked
 /// into our task instead of getting its own recent-apps entry. Users
-/// then see the authenticator app "linked" to OpaqueShare: swiping the
+/// then see the authenticator app "linked" to Nduzem: swiping the
 /// authenticator away also closes us.
 ///
 /// Fix: on Android, use `AndroidIntent` with both

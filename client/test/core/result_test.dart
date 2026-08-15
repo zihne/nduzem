@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:opaqueshare/core/result.dart';
+import 'package:nduzem/core/result.dart';
 
 void main() {
   test('Ok exposes value and reports isOk', () {

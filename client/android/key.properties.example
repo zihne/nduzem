@@ -14,7 +14,7 @@
 # Generate a keystore (one-time) with:
 #
 #   keytool -genkey -v \
-#     -keystore ~/opaqueshare-upload.jks \
+#     -keystore ~/nduzem-upload.jks \
 #     -keyalg RSA -keysize 2048 -validity 10000 \
 #     -alias upload
 #
@@ -25,4 +25,4 @@
 storePassword=CHANGE_ME
 keyPassword=CHANGE_ME
 keyAlias=upload
-storeFile=/absolute/path/to/opaqueshare-upload.jks
+storeFile=/absolute/path/to/nduzem-upload.jks

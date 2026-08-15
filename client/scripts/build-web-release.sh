@@ -20,10 +20,10 @@
 # non-zero exit is a hard failure with a message on stderr.
 #
 # Usage:
-#   scripts/build-web-release.sh [OPAQUESHARE_API_BASE] [OPAQUESHARE_SHARE_URL_BASE]
+#   scripts/build-web-release.sh [NDUZEM_API_BASE] [NDUZEM_SHARE_URL_BASE]
 #
 # Or via env var:
-#   OPAQUESHARE_API_BASE=https://api.opaqueshare.com scripts/build-web-release.sh
+#   NDUZEM_API_BASE=https://api.nduzem.com scripts/build-web-release.sh
 #
 # The API base MUST be an https:// URL for a production build. The
 # script warns (but doesn't fail) on http:// so you can still run it
@@ -57,15 +57,15 @@ fail() {
 }
 
 # --- resolve arguments -----------------------------------------------
-API_BASE="${1:-${OPAQUESHARE_API_BASE:-}}"
+API_BASE="${1:-${NDUZEM_API_BASE:-}}"
 if [[ -z "$API_BASE" ]]; then
-    fail "OPAQUESHARE_API_BASE is required.
+    fail "NDUZEM_API_BASE is required.
 
 Usage:
-  scripts/build-web-release.sh https://api.opaqueshare.com [https://opaqueshare.com]
+  scripts/build-web-release.sh https://api.nduzem.com [https://nduzem.com]
 
 Or:
-  export OPAQUESHARE_API_BASE=https://api.opaqueshare.com
+  export NDUZEM_API_BASE=https://api.nduzem.com
   scripts/build-web-release.sh"
 fi
 
@@ -77,13 +77,13 @@ esac
 
 # Share URL base — same derivation as build-release.sh so the two
 # scripts stay in lockstep on how they compute defaults.
-SHARE_URL_BASE="${2:-${OPAQUESHARE_SHARE_URL_BASE:-}}"
+SHARE_URL_BASE="${2:-${NDUZEM_SHARE_URL_BASE:-}}"
 if [[ -z "$SHARE_URL_BASE" ]]; then
     SHARE_URL_BASE="${API_BASE/\/\/api./\/\/}"
     if [[ "$SHARE_URL_BASE" == "$API_BASE" ]]; then
         warn "Could not derive a share URL base from API base — no 'api.' prefix.
 Falling back to the API base as the share host. Set
-OPAQUESHARE_SHARE_URL_BASE explicitly if this is wrong for your setup."
+NDUZEM_SHARE_URL_BASE explicitly if this is wrong for your setup."
     fi
 fi
 
@@ -151,8 +151,8 @@ say "  Share URL:  $SHARE_URL_BASE"
 # app at load time, visibly, on the next deploy.
 flutter build web --release \
     --no-web-resources-cdn \
-    --dart-define=OPAQUESHARE_API_BASE="$API_BASE" \
-    --dart-define=OPAQUESHARE_SHARE_URL_BASE="$SHARE_URL_BASE"
+    --dart-define=NDUZEM_API_BASE="$API_BASE" \
+    --dart-define=NDUZEM_SHARE_URL_BASE="$SHARE_URL_BASE"
 
 BUNDLE_DIR="$CLIENT_ROOT/build/web"
 if [[ ! -f "$BUNDLE_DIR/index.html" ]]; then
@@ -196,7 +196,7 @@ printf '  Share URL:    %s\n' "$SHARE_URL_BASE"
 echo
 echo "Next steps:"
 echo "  1. rsync the bundle to the prod box (adjust host + path):"
-echo "     rsync -av --delete build/web/ prod:/opt/opaqueshare-server/infra/www-app/"
+echo "     rsync -av --delete build/web/ prod:/opt/nduzem-server/infra/www-app/"
 echo "  2. Caddy serves the new files immediately (bind-mount, live)."
 echo "     If the app.\$DOMAIN vhost is new, reload Caddy once:"
 echo "       docker compose -f infra/docker/docker-compose.prod.yml \\"

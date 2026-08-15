@@ -1,21 +1,21 @@
-# Running OpaqueShare (dev)
+# Running Nduzem (dev)
 
 Smoke-test guide for the M1 identity flow. Assumes the backend is running
-locally (see `../opaqueshare-server`'s README).
+locally (see `../nduzem-server`'s README).
 
 ## Prerequisites
 
 - Flutter `>=3.24`, tested at 3.41.5 stable (`.metadata` pins the SDK
   revision for reproducible builds — see spec §13.1).
 - Backend up locally: `.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000`
-  from `../opaqueshare-server/backend/`. Note the `--host 0.0.0.0` — needed
+  from `../nduzem-server/backend/`. Note the `--host 0.0.0.0` — needed
   so a phone on the LAN can reach it.
 - For iOS: macOS with Xcode. Linux workstations can only target Android.
 - For Android: emulator OR a real device with USB debugging enabled.
 
 ## Pick your backend URL
 
-The client reads `OPAQUESHARE_API_BASE` at compile time via `--dart-define`.
+The client reads `NDUZEM_API_BASE` at compile time via `--dart-define`.
 
 | Scenario | URL |
 |---|---|
@@ -40,11 +40,11 @@ flutter run --debug
 
 # Real Android device on LAN (adjust the IP):
 flutter run --debug \
-  --dart-define=OPAQUESHARE_API_BASE=http://192.168.1.42:8000
+  --dart-define=NDUZEM_API_BASE=http://192.168.1.42:8000
 
 # iOS simulator (macOS only):
 flutter run --debug -d "iPhone" \
-  --dart-define=OPAQUESHARE_API_BASE=http://localhost:8000
+  --dart-define=NDUZEM_API_BASE=http://localhost:8000
 ```
 
 ## What to smoke-test

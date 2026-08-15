@@ -1,8 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 
-import 'package:opaqueshare/api/api_client.dart';
-import 'package:opaqueshare/api/links_api.dart';
+import 'package:nduzem/api/api_client.dart';
+import 'package:nduzem/api/links_api.dart';
 
 class _FakeClient extends Mock implements ApiClient {}
 

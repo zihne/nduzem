@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:opaqueshare/crypto/suite.dart';
+import 'package:nduzem/crypto/suite.dart';
 
 void main() {
   test('fromWire(1) returns classical', () {

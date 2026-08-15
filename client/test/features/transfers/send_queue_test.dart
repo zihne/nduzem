@@ -6,15 +6,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 
-import 'package:opaqueshare/api/api_client.dart';
-import 'package:opaqueshare/api/users_api.dart';
-import 'package:opaqueshare/crypto/plaintext_source.dart';
-import 'package:opaqueshare/features/auth/auth_providers.dart';
-import 'package:opaqueshare/features/history/transfer_history_provider.dart';
-import 'package:opaqueshare/features/history/transfer_history_repository.dart';
-import 'package:opaqueshare/features/transfers/picked_file.dart';
-import 'package:opaqueshare/features/transfers/send_queue.dart';
-import 'package:opaqueshare/features/transfers/transfer_service.dart';
+import 'package:nduzem/api/api_client.dart';
+import 'package:nduzem/api/users_api.dart';
+import 'package:nduzem/crypto/plaintext_source.dart';
+import 'package:nduzem/features/auth/auth_providers.dart';
+import 'package:nduzem/features/history/transfer_history_provider.dart';
+import 'package:nduzem/features/history/transfer_history_repository.dart';
+import 'package:nduzem/features/transfers/picked_file.dart';
+import 'package:nduzem/features/transfers/send_queue.dart';
+import 'package:nduzem/features/transfers/transfer_service.dart';
 
 class _FakeTransferService extends Fake implements TransferService {}
 
