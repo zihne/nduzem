@@ -132,7 +132,21 @@ class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Verify email')),
+      appBar: AppBar(
+        title: const Text('Verify email'),
+        // Deep links arrive on a fresh navigation stack, so there is
+        // nothing to pop and Flutter renders no back arrow. Without this
+        // the screen is a dead end: when the token is expired, already
+        // consumed, or absent, the only controls are "Verify" and
+        // "Resend", both of which need a code the user may not have.
+        // `go` rather than `pop`, for the same reason — there is no
+        // history to return to.
+        leading: IconButton(
+          icon: const Icon(Icons.close),
+          tooltip: 'Leave verification',
+          onPressed: () => context.go('/'),
+        ),
+      ),
       body: MaxWidthContent(
           child: Padding(
         padding: const EdgeInsets.all(16),
@@ -179,6 +193,15 @@ class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
               Text(
                 _error!,
                 style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+              const SizedBox(height: 4),
+              // An expired or already-consumed link is the common case,
+              // and it is not something the user can fix from here. Say
+              // so with a route out rather than leaving them to discover
+              // that the close button applies.
+              TextButton(
+                onPressed: _busy ? null : () => context.go('/'),
+                child: const Text('Continue without verifying'),
               ),
             ],
             if (_info != null) ...[
