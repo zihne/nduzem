@@ -60,6 +60,24 @@ class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
   }
 
   @override
+  void didUpdateWidget(covariant VerifyEmailScreen old) {
+    super.didUpdateWidget(old);
+    // The deep link usually arrives while this screen is ALREADY on
+    // screen: the user registers, lands here waiting for the mail, then
+    // taps the link. go_router changes location, but Flutter may reuse
+    // this State object rather than building a new one — in which case
+    // `initState` does not run again and the token would be received and
+    // silently ignored, leaving the user staring at the code form they
+    // were already looking at.
+    //
+    // Firing on the null -> non-null transition covers that. Guarded so
+    // an unrelated rebuild cannot re-submit a token already in flight.
+    if (widget.token != null && widget.token != old.token && !_busy) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _verifyToken());
+    }
+  }
+
+  @override
   void dispose() {
     _code.dispose();
     _emailField.dispose();
