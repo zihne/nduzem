@@ -119,7 +119,15 @@ cd "$CLIENT_ROOT"
 # --- 1. Flutter available --------------------------------------------
 say "Checking Flutter is on PATH…"
 command -v flutter >/dev/null || fail "flutter not on PATH."
-flutter --version | head -1
+# Capture the whole stream before slicing it. `flutter --version | head -1`
+# looks harmless but breaks intermittently: head exits after one line, and
+# when flutter then tries to print its "a new version is available" box the
+# closed pipe raises SIGPIPE, which the Dart tool does not handle — it dies
+# with an unhandled FileSystemException and takes the build with it. The
+# failure only appears when flutter happens to have an upgrade notice, so it
+# looks random and unrelated to whatever else changed.
+_flutter_version="$(flutter --version 2>/dev/null)"
+printf '%s\n' "${_flutter_version%%$'\n'*}"
 ok "Flutter ready"
 
 # --- 2. Release signing config exists --------------------------------

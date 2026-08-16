@@ -161,7 +161,15 @@ CocoaPods is still required. Install with: sudo gem install cocoapods"
 # writing after `head -1` exits, takes SIGPIPE, and pipefail turns that
 # into a 141 that `set -e` acts on — the script would exit here, having
 # printed the version and nothing else, with no error message at all.
-flutter --version 2>/dev/null | head -1 || true
+# Capture the whole stream before slicing it. `flutter --version | head -1`
+# looks harmless but breaks intermittently: head exits after one line, and
+# when flutter then tries to print its "a new version is available" box the
+# closed pipe raises SIGPIPE, which the Dart tool does not handle — it dies
+# with an unhandled FileSystemException and takes the build with it. The
+# failure only appears when flutter happens to have an upgrade notice, so it
+# looks random and unrelated to whatever else changed.
+_flutter_version="$(flutter --version 2>/dev/null)"
+printf '%s\n' "${_flutter_version%%$'\n'*}"
 xcodebuild -version 2>/dev/null | head -1 || true
 ok "toolchain ready"
 

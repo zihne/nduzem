@@ -100,7 +100,15 @@ cd "$CLIENT_ROOT"
 # --- 1. Flutter available --------------------------------------------
 say "Checking Flutter is on PATH…"
 command -v flutter >/dev/null || fail "flutter not on PATH."
-flutter --version | head -1
+# Capture the whole stream before slicing it. `flutter --version | head -1`
+# looks harmless but breaks intermittently: head exits after one line, and
+# when flutter then tries to print its "a new version is available" box the
+# closed pipe raises SIGPIPE, which the Dart tool does not handle — it dies
+# with an unhandled FileSystemException and takes the build with it. The
+# failure only appears when flutter happens to have an upgrade notice, so it
+# looks random and unrelated to whatever else changed.
+_flutter_version="$(flutter --version 2>/dev/null)"
+printf '%s\n' "${_flutter_version%%$'\n'*}"
 ok "Flutter ready"
 
 # --- 2. Clean --------------------------------------------------------
@@ -196,7 +204,7 @@ printf '  Share URL:    %s\n' "$SHARE_URL_BASE"
 echo
 echo "Next steps:"
 echo "  1. rsync the bundle to the prod box (adjust host + path):"
-echo "     rsync -av --delete build/web/ prod:/opt/nduzem-server/infra/www-app/"
+echo "     rsync -av --delete build/web/ prod:/opt/opaqueshare-server/infra/www-app/"
 echo "  2. Caddy serves the new files immediately (bind-mount, live)."
 echo "     If the app.\$DOMAIN vhost is new, reload Caddy once:"
 echo "       docker compose -f infra/docker/docker-compose.prod.yml \\"
