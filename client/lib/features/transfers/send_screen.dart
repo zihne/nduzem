@@ -511,7 +511,11 @@ class _SendScreenState extends ConsumerState<SendScreen> {
             if (_file != null) ...[
               const SizedBox(height: 4),
               Text(
-                '${_file!.length} bytes'
+                // `_prettyBytes` already existed and is used for quota
+                // and progress figures; this one line printed the raw
+                // count, so a picked file read "287478 bytes" while the
+                // same value showed as "281 KiB" elsewhere in the flow.
+                '${_prettyBytes(_file!.length)}'
                 '${_file!.mime == null ? '' : ' · ${_file!.mime}'}',
                 style: const TextStyle(fontStyle: FontStyle.italic),
               ),
