@@ -52,6 +52,28 @@
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
+            <!--
+                Opt in to Flutter's built-in deep-link handling. Without
+                this, Android delivers the App Link intent to
+                MainActivity and the app comes to the foreground, but
+                Flutter never hands the URI to the Router API — so
+                go_router does not navigate and the user simply sees
+                whichever screen they were already on.
+
+                That failure is easy to misread as an App Links problem,
+                because the link DOES open the app. It only shows up on a
+                warm start: someone registers, sits on /verify-email
+                waiting for the mail, taps the link, and the app returns
+                to the foreground on the same screen with the token
+                silently discarded.
+
+                Required for apps using the Router API (go_router);
+                Flutter leaves it off by default.
+            -->
+            <meta-data
+              android:name="flutter_deeplinking_enabled"
+              android:value="true"
+              />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
