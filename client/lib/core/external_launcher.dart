@@ -2,6 +2,7 @@ import 'dart:io' show Platform;
 
 import 'package:android_intent_plus/android_intent.dart';
 import 'package:android_intent_plus/flag.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:url_launcher/url_launcher.dart';
 
 /// Result of an external-app launch attempt.
@@ -30,7 +31,18 @@ enum ExternalLaunchResult { ok, noHandler }
 /// caller show a targeted message ("install an authenticator app") vs.
 /// the platform's own error.
 Future<ExternalLaunchResult> launchExternalUri(Uri uri) async {
-  if (Platform.isAndroid) {
+  // `Platform` comes from `dart:io`, which on web is STUBBED rather than
+  // rejected: the import compiles and `flutter build web` succeeds, but
+  // reading `Platform.isAndroid` throws `UnsupportedError` at runtime.
+  // That killed this function before url_launcher was ever reached, and
+  // because the throw surfaced as an unhandled async error the caller saw
+  // nothing at all — the Terms and Privacy links on the registration
+  // screen were simply dead.
+  //
+  // `kIsWeb` is a compile-time constant, so on web `!kIsWeb` is `false`
+  // and the `Platform` access is short-circuited away entirely rather
+  // than merely skipped at runtime.
+  if (!kIsWeb && Platform.isAndroid) {
     return _launchOnAndroid(uri);
   }
   return _launchViaUrlLauncher(uri);
