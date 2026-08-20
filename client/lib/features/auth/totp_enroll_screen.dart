@@ -205,10 +205,21 @@ class _TotpEnrollScreenState extends ConsumerState<TotpEnrollScreen> {
 
                   // --- Zero-knowledge caveat ---
                   const Text(
-                    'Heads-up: if you lose your device AND your recovery '
-                    "codes, we can restore account access — but we can't "
-                    'restore keys that live only on the device. Past '
-                    'transfers stay encrypted.',
+                    // Two artefacts with confusingly similar names sit one
+                    // screen apart: recovery CODES restore sign-in, a
+                    // recovery KEY restores the encryption keys. Someone
+                    // saving codes here can reasonably assume they are now
+                    // covered for a lost device — they are not, and their
+                    // files are what they would lose. This copy predates
+                    // key backup and named the problem without naming the
+                    // fix, at the one moment the user is minded to act on
+                    // it.
+                    'Heads-up: these codes get you back into your account, '
+                    'not back into your files. If you lose this device, the '
+                    'key that decrypts past transfers goes with it — unless '
+                    'you have also saved a recovery key, under Settings → '
+                    'Back up your key. Two different things, both worth '
+                    'having.',
                     style: TextStyle(fontStyle: FontStyle.italic),
                   ),
                   const SizedBox(height: 24),

@@ -137,12 +137,24 @@ class _HistoryTile extends ConsumerWidget {
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
-      onTap: () => showDialog<void>(
-        context: context,
-        builder: (dialogContext) => _DetailDialog(entry: entry),
-      ),
+      onTap: () => showTransferDetailDialog(context, entry),
     );
   }
+}
+
+/// Open the transfer-details dialog for [entry].
+///
+/// Public so tests exercise the real dialog rather than a re-implementation
+/// of it — the layout is the thing under test, and a copy would not have
+/// the bug. Called from the history list; the dialog itself stays private.
+Future<void> showTransferDetailDialog(
+  BuildContext context,
+  TransferHistoryEntry entry,
+) {
+  return showDialog<void>(
+    context: context,
+    builder: (dialogContext) => _DetailDialog(entry: entry),
+  );
 }
 
 /// Compact "who was on the other end" summary for the list row. The
@@ -202,9 +214,18 @@ class _DetailDialog extends ConsumerWidget {
       },
     ];
     return AlertDialog(
+      // `scrollable` matters on small screens. Without it AlertDialog gives
+      // `content` whatever height is left and does NOT scroll it, so a
+      // transfer with several rows overflows into the actions row and
+      // `Remove` is drawn over `Close`. Reported on a 6" phone.
+      scrollable: true,
       title: const Text('Transfer details'),
-      content: SizedBox(
-        width: 400,
+      content: ConstrainedBox(
+        // Was `SizedBox(width: 400)`, which forces exactly 400 even when the
+        // dialog has less room — the horizontal half of the same bug. A max
+        // lets it shrink to fit a narrow screen while still sitting at a
+        // readable width on a tablet or desktop.
+        constraints: const BoxConstraints(maxWidth: 400),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -215,7 +236,14 @@ class _DetailDialog extends ConsumerWidget {
               SelectableText(value),
               const SizedBox(height: 12),
             ],
-            Row(
+            // Wrap rather than Row + Spacer: at 6" the two buttons and the
+            // gap between them exceed the dialog width, and a Row overflows
+            // rather than reflowing. Wrap spreads them on one line when they
+            // fit and stacks them when they don't.
+            Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              spacing: 8,
+              runSpacing: 4,
               children: [
                 OutlinedButton.icon(
                   icon: const Icon(Icons.copy),
@@ -232,7 +260,6 @@ class _DetailDialog extends ConsumerWidget {
                     );
                   },
                 ),
-                const Spacer(),
                 TextButton.icon(
                   icon: const Icon(Icons.delete_outline),
                   label: const Text('Remove'),
