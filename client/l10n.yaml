@@ -1,0 +1,12 @@
+# Localisation config. `flutter gen-l10n` runs automatically on build
+# because `generate: true` is set under `flutter:` in pubspec.yaml.
+#
+# app_en.arb is the TEMPLATE and the only file written by hand for new
+# strings. Translations are added as app_de.arb, app_fr.arb, app_es.arb
+# alongside it; any key missing from a translation falls back to English
+# rather than showing a blank.
+arb-dir: lib/l10n
+template-arb-file: app_en.arb
+output-localization-file: app_localizations.dart
+output-class: AppL10n
+nullable-getter: false

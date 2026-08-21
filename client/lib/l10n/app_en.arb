@@ -1,0 +1,72 @@
+{
+  "@@locale": "en",
+
+  "appTitle": "Nduzem",
+  "@appTitle": {
+    "description": "Product name. Do NOT translate — it is a registered trade mark (UK00004433239) and a coined word with no meaning in any language."
+  },
+
+  "settingsTitle": "Settings",
+  "@settingsTitle": { "description": "App bar title on the settings screen." },
+
+  "settingsSignedIn": "Signed in",
+  "@settingsSignedIn": { "description": "Section heading above the current account's email address." },
+
+  "settingsSectionEncryptionKey": "Encryption key",
+  "@settingsSectionEncryptionKey": { "description": "Section heading for key backup and restore actions." },
+
+  "settingsBackUpKey": "Back up your key",
+  "@settingsBackUpKey": { "description": "Menu item: start the key-backup flow, which produces a recovery key." },
+
+  "settingsBackUpKeySubtitle": "Save a recovery key so you can restore access on another device.",
+  "@settingsBackUpKeySubtitle": {
+    "description": "Explains what backing up achieves. 'Recovery key' is a distinct concept from the 2FA 'recovery codes' — keep the two clearly different words in translation, because conflating them is a known user-safety hazard."
+  },
+
+  "settingsRestoreKey": "Restore from recovery key",
+  "@settingsRestoreKey": { "description": "Menu item: bring an existing key onto this device using a saved recovery key." },
+
+  "settingsRestoreKeySubtitle": "Bring your original key back onto this device.",
+  "@settingsRestoreKeySubtitle": { "description": "Explains what restoring achieves." },
+
+  "settingsReplaceKey": "Replace encryption key",
+  "@settingsReplaceKey": { "description": "Menu item: generate a new identity key, abandoning the old one." },
+
+  "settingsSectionDangerZone": "Danger zone",
+  "@settingsSectionDangerZone": { "description": "Section heading for irreversible actions. Convey seriousness, not alarm." },
+
+  "settingsDeleteAccount": "Delete my account",
+  "@settingsDeleteAccount": { "description": "Menu item: permanently erase the account." },
+
+  "settingsDeleteAccountSubtitle": "Permanently erase your account and everything in it.",
+  "@settingsDeleteAccountSubtitle": { "description": "Explains the consequence of account deletion." },
+
+  "settingsSectionAboutLegal": "About & legal",
+  "@settingsSectionAboutLegal": { "description": "Section heading above links to the published legal pages." },
+
+  "legalPrivacyPolicy": "Privacy Policy",
+  "@legalPrivacyPolicy": { "description": "Link to the published privacy policy. Use the established legal term in the target language." },
+
+  "legalPrivacyPolicyBlurb": "What we collect, what we cannot see, and who processes it.",
+  "@legalPrivacyPolicyBlurb": {
+    "description": "Summary of the privacy policy. 'What we cannot see' is the product's central claim — keep the emphasis on inability rather than on a promise not to look."
+  },
+
+  "legalTermsOfService": "Terms of Service",
+  "@legalTermsOfService": { "description": "Link to the published terms. Use the established legal term in the target language." },
+
+  "legalTermsOfServiceBlurb": "The agreement between you and Zihne Ltd.",
+  "@legalTermsOfServiceBlurb": { "description": "Summary of the terms. 'Zihne Ltd' is a company name — never translate it." },
+
+  "legalAccountDeletion": "Account deletion",
+  "@legalAccountDeletion": { "description": "Link to the published account-deletion policy page." },
+
+  "legalAccountDeletionBlurb": "What deletion removes, and what is retained.",
+  "@legalAccountDeletionBlurb": { "description": "Summary of the deletion policy." },
+
+  "openInBrowser": "Open this in a browser: {url}",
+  "@openInBrowser": {
+    "description": "Shown when no app could handle a link, so the user must open it manually.",
+    "placeholders": { "url": { "type": "String", "example": "https://nduzem.com/terms.html" } }
+  }
+}

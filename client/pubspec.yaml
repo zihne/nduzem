@@ -5,7 +5,7 @@ publish_to: none
 # Version scheme: MAJOR.MINOR.PATCH+BUILD. BUILD is a monotonic counter that
 # store submissions bump so the same source can be re-signed without a version
 # regression. See docs/adr/0001-client-architecture.md.
-version: 0.1.0+34
+version: 0.1.0+35
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
@@ -13,6 +13,8 @@ environment:
 
 dependencies:
   flutter: { sdk: flutter }
+  flutter_localizations: { sdk: flutter }
+  intl: any
 
   # State: Riverpod without codegen — smaller build, faster iteration for M1.
   # A future milestone can add riverpod_generator when the provider surface grows.
@@ -131,3 +133,4 @@ flutter_launcher_icons:
 # the font simply isn't in the APK.
 flutter:
   uses-material-design: true
+  generate: true
