@@ -40,6 +40,16 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
   // fallback path (iOS / no-Play). Populated on Android from
   // `IapPurchaseService.queryProducts` after we know the catalog.
   Set<String> _storeAvailableSkus = const {};
+
+  /// SKU → the store's own localised price string ("£1.99", "1,99 €").
+  ///
+  /// This is what the user is ACTUALLY charged. The server catalogue also
+  /// carries a price, but it is a separate hand-maintained guess: base
+  /// prices are set in USD and each store applies its own conversion, VAT
+  /// treatment and rounding to a price point. Rendering the catalogue
+  /// figure means showing one number and charging another — silently, and
+  /// visible to the user only at the moment they are asked to pay.
+  Map<String, String> _storePrices = const {};
   bool _usingStubFlow = true;
   bool _loading = true;
   String? _error;
@@ -76,10 +86,19 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
 
       final storeAvailable = await service.storeAvailable;
       Set<String> playSkus = const {};
+      Map<String, String> storePrices = const {};
       if (storeAvailable) {
         final catalogSkus = catalog.products.map((p) => p.sku).toSet();
         final products = await service.queryProducts(catalogSkus);
         playSkus = products.keys.toSet();
+        // Keep the prices, not just the keys. `ProductDetails.price` is
+        // the store's own localised string and is what the user is
+        // actually charged; the catalogue figure is a separate hand-set
+        // guess that the store's conversion and VAT handling will not
+        // necessarily match.
+        storePrices = {
+          for (final entry in products.entries) entry.key: entry.value.price,
+        };
       }
 
       if (!mounted) return;
@@ -87,6 +106,7 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
         _balance = balance;
         _catalog = catalog;
         _storeAvailableSkus = playSkus;
+        _storePrices = storePrices;
         _usingStubFlow = !storeAvailable;
       });
     } on ApiException catch (exc) {
@@ -213,6 +233,7 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
               _CatalogSection(
                 catalog: _catalog,
                 storeAvailableSkus: _storeAvailableSkus,
+                storePrices: _storePrices,
                 onBuy: _buy,
                 purchasingSku: _purchasingSku,
               ),
@@ -300,6 +321,7 @@ class _CatalogSection extends StatelessWidget {
   const _CatalogSection({
     required this.catalog,
     required this.storeAvailableSkus,
+    required this.storePrices,
     required this.onBuy,
     required this.purchasingSku,
   });
@@ -309,6 +331,9 @@ class _CatalogSection extends StatelessWidget {
   /// (iOS / no-Play) — tiles render as normal, since the STUB path
   /// works for all of them.
   final Set<String> storeAvailableSkus;
+
+  /// SKU → the store's own localised price string. Empty on the stub flow.
+  final Map<String, String> storePrices;
   final void Function(CatalogProduct) onBuy;
   final String? purchasingSku;
 
@@ -345,6 +370,7 @@ class _CatalogSection extends StatelessWidget {
         product: p,
         busy: purchasingSku == p.sku,
         unavailable: unavailable,
+        storePrice: storePrices[p.sku],
         onBuy: unavailable ? null : () => onBuy(p),
       );
     }
@@ -379,11 +405,18 @@ class _ProductTile extends StatelessWidget {
     required this.product,
     required this.busy,
     required this.unavailable,
+    required this.storePrice,
     required this.onBuy,
   });
   final CatalogProduct product;
   final bool busy;
   final bool unavailable;
+
+  /// The store's own localised price ("£1.99", "1,99 €") — what the user
+  /// is actually charged. Null on the stub flow, on web, or if the product
+  /// query failed; the catalogue price is the fallback and is at least
+  /// approximately right.
+  final String? storePrice;
 
   /// null when the tile is disabled (currently `unavailable == true`
   /// is the only case).
@@ -424,7 +457,8 @@ class _ProductTile extends StatelessWidget {
             ),
             const SizedBox(width: 12),
             Text(
-              _priceLabel(product.listPriceCents, product.currency),
+              storePrice ??
+                  _priceLabel(product.listPriceCents, product.currency),
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(width: 12),
