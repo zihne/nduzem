@@ -171,7 +171,7 @@ final transferServiceProvider = FutureProvider<TransferService>((ref) async {
   final envelope = await ref.watch(envelopeProvider.future);
   final storage = ref.watch(secureStorageProvider);
   final sodium = await ref.watch(sodiumProvider.future);
-  return TransferService(
+  final service = TransferService(
     transfers: transfers,
     links: wiring.linksApi,
     users: wiring.usersApi,
@@ -181,6 +181,11 @@ final transferServiceProvider = FutureProvider<TransferService>((ref) async {
     storage: storage,
     sodium: sodium,
   );
+  // The service creates its own `http.Client` and holds it open for reuse
+  // across parts and requests. Close it when the provider is disposed —
+  // otherwise the connection pool outlives the service that owns it.
+  ref.onDispose(service.dispose);
+  return service;
 });
 
 // --- session state ------------------------------------------------------

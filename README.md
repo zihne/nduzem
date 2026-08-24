@@ -49,8 +49,10 @@ The backend (FastAPI conduit + infrastructure) is **not** open source.
 
 ## Verifying a release
 
-> The verification toolchain is under construction; details below describe
-> the target workflow.
+> **The verification toolchain is under construction; the workflow below
+> is the target, not the current state.** `verify.sh` is not implemented
+> and **exits non-zero** — it verifies nothing today, and says so rather
+> than reporting a success it has not earned.
 
 For every released build, this repository publishes a **build manifest**
 recording the exact source commit, dependency lockfile hashes, and the

@@ -79,7 +79,19 @@ esac
 # scripts stay in lockstep on how they compute defaults.
 SHARE_URL_BASE="${2:-${NDUZEM_SHARE_URL_BASE:-}}"
 if [[ -z "$SHARE_URL_BASE" ]]; then
-    SHARE_URL_BASE="${API_BASE/\/\/api./\/\/}"
+    # Derive by stripping a leading `api.` from the URL's host.
+    #
+    # Was `${API_BASE/\/\/api./\/\/}`, which is broken: bash keeps the
+    # backslashes in the replacement half of a pattern substitution, so
+    # it produced `https:\/\/nduzem.com` and then tripped the validation
+    # below with a message that blamed the input. It failed safe rather
+    # than baking a malformed URL into a release, but it meant the
+    # documented one-argument invocation always failed for the normal
+    # `api.<host>` deployment.
+    #
+    # The Android and iOS scripts were fixed and this one was not — the
+    # three derive the same value and must stay in lockstep.
+    SHARE_URL_BASE="$(printf '%s' "$API_BASE" | sed 's|//api\.|//|')"
     if [[ "$SHARE_URL_BASE" == "$API_BASE" ]]; then
         warn "Could not derive a share URL base from API base — no 'api.' prefix.
 Falling back to the API base as the share host. Set

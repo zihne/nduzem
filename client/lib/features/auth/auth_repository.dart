@@ -436,8 +436,34 @@ class AuthRepository implements TokenSource {
     return _accessCache ?? await _storage.read(SecureStore.kAccessToken);
   }
 
+  /// Non-null while a refresh is in flight. See [refreshAccessToken].
+  Future<String?>? _refreshInFlight;
+
   @override
-  Future<String?> refreshAccessToken() async {
+  Future<String?> refreshAccessToken() {
+    // SINGLE-FLIGHT, and not merely as an optimisation.
+    //
+    // The server rotates refresh tokens on every use AND treats the reuse
+    // of an already-rotated token as theft: it revokes the entire token
+    // FAMILY and commits that before returning 401 (server
+    // `api/v1/auth.py`, "Theft detection").
+    //
+    // So two concurrent 401s racing here would each read the same cached
+    // refresh token and call the endpoint twice. The first rotates and
+    // mints a replacement; the second replays the now-rotated token, the
+    // server revokes the whole family — including the token just minted —
+    // and the `on ApiException` branch below signs out a session that was
+    // valid a millisecond earlier.
+    //
+    // Concurrent 401s are ordinary, not exotic: an app resume or a screen
+    // firing several requests at once produces exactly this. Callers must
+    // therefore share one refresh rather than each starting their own.
+    return _refreshInFlight ??= _performRefresh().whenComplete(() {
+      _refreshInFlight = null;
+    });
+  }
+
+  Future<String?> _performRefresh() async {
     final refresh =
         _refreshCache ?? await _storage.read(SecureStore.kRefreshToken);
     if (refresh == null) return null;
