@@ -4,7 +4,7 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as dart_crypto;
 import 'package:sodium_libs/sodium_libs.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -44,7 +44,10 @@ import '../../storage/secure_storage.dart';
 /// (M9.5), the pubkey is null → skip verification and note it on the
 /// returned [DecryptedTransfer].
 class TransferService {
-  const TransferService({
+  // Not `const`: the service owns a lazily-created `http.Client` (see
+  // `_httpClient`), and a const constructor cannot hold a `late final`.
+  // Nothing constructed this as a const expression.
+  TransferService({
     required TransfersApi transfers,
     required LinksApi links,
     required UsersApi users,
@@ -74,7 +77,33 @@ class TransferService {
   final Sodium _sodium;
   final http.Client? _http;
 
-  http.Client get _httpClient => _http ?? http.Client();
+  /// ONE client for the lifetime of this service, not one per request.
+  ///
+  /// This was `=> _http ?? http.Client()` — a getter, so every read
+  /// constructed a fresh client. `_uploadOnePart` reads it once per
+  /// multipart part, and nothing was ever closed: a 10 GB transfer leaked
+  /// one `IOClient` and its whole connection pool per part, risking
+  /// socket and file-descriptor exhaustion partway through exactly the
+  /// large uploads the product exists for.
+  ///
+  /// `late final` initialises on first use and never again. Tests that
+  /// inject a client still get theirs. When this service creates its own,
+  /// [dispose] closes it.
+  late final http.Client _httpClient = _http ?? http.Client();
+
+  /// Close the client this service created. No-op when one was injected —
+  /// whoever supplied it owns its lifecycle.
+  void dispose() {
+    if (_http == null) _httpClient.close();
+  }
+
+  /// Test seam. The leak this guards against is only observable by
+  /// checking that repeated reads return the SAME client — which is
+  /// otherwise unreachable from a test, since `_httpClient` is private
+  /// and the per-request construction was invisible to every other
+  /// assertion.
+  @visibleForTesting
+  http.Client get debugHttpClient => _httpClient;
 
   // --- lookup helper (used by the UI before sealing) --------------------
 
