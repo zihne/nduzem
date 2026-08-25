@@ -162,6 +162,10 @@ class TransferService {
   Future<SendResult> send({
     required SendMode mode,
     UserLookup? recipient,
+    /// Set only when [recipient] came from the local cache (ADR-0039),
+    /// so the server can refuse a send sealed to a rotated key before
+    /// the upload starts. Null after a fresh lookup.
+    String? recipientKeyFingerprint,
     required PlaintextSource source,
     String? linkPassword,
     String? recipientEmail,
@@ -244,6 +248,7 @@ class TransferService {
       final initiated = await _transfers.initiate(
         mode: mode == SendMode.app ? 'app' : 'link',
         recipientId: recipient?.userId,
+        recipientKeyFingerprint: recipientKeyFingerprint,
         linkPassword: linkPassword,
         recipientEmail: recipientEmail,
         byteCount: byteCount,

@@ -131,6 +131,22 @@ class NetworkUnreachableException extends ApiException {
       'NetworkUnreachableException(detail=${technicalDetail ?? '(none)'})';
 }
 
+/// The recipient rotated their encryption key since the sender cached it
+/// (ADR-0039).
+///
+/// Typed rather than left as a 409 with a message, for the same reason
+/// [QuotaExceededException] is: the caller must branch on it, and a
+/// caller matching on prose breaks silently when the wording changes —
+/// falling through to the GENERIC error path, so the user sees
+/// "something went wrong" instead of a key-change warning. That failure
+/// would land exactly where this design is supposed to help.
+///
+/// Raised at `/initiate`, so nothing has been uploaded.
+class RecipientKeyChangedException extends ApiException {
+  RecipientKeyChangedException({required super.message})
+      : super(statusCode: 409);
+}
+
 /// Translate a raw async operation's network failures into a
 /// [NetworkUnreachableException]. Catches [http.ClientException],
 /// [SocketException], and [TimeoutException] — the three classes of
@@ -269,6 +285,16 @@ class ApiClient {
         requiredMb: (detail['required_mb'] as num? ?? 0).toInt(),
         subRemainingMb: (detail['sub_remaining_mb'] as num? ?? 0).toInt(),
         creditMb: (detail['credit_mb'] as num? ?? 0).toInt(),
+      );
+    }
+    // ADR-0039: stale cached recipient key. Typed so the send screen can
+    // branch without matching on the message text.
+    if (response.statusCode == 409 &&
+        detail is Map<String, dynamic> &&
+        detail['error'] == 'recipient_key_changed') {
+      throw RecipientKeyChangedException(
+        message: (detail['message'] as String?) ??
+            "The recipient's encryption key has changed.",
       );
     }
     final message = detail is String
