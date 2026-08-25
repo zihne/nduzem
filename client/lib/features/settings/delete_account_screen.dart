@@ -7,6 +7,7 @@ import '../../api/users_api.dart';
 import '../../widgets/max_width_content.dart';
 import '../../widgets/password_form_field.dart';
 import '../auth/auth_providers.dart';
+import '../history/transfer_history_provider.dart';
 
 /// Self-serve account erasure — GDPR Article 17.
 ///
@@ -53,6 +54,24 @@ class _DeleteAccountScreenState extends ConsumerState<DeleteAccountScreen> {
     try {
       final repo = await ref.read(authRepositoryProvider.future);
       final receipt = await repo.eraseAccount(password: _password.text);
+
+      // The server has tombstoned the account; now remove what the DEVICE
+      // kept. Until ADR-0039 nothing did, so "delete my account" left a
+      // plaintext record on the phone of who you corresponded with and
+      // what the files were called — for an account that no longer
+      // existed. The listing says "your account, and everything in it",
+      // and that was true of the server and false here.
+      //
+      // Cleared AFTER the server call so a failed erasure destroys
+      // nothing, and BEFORE the session is torn down, since both stores
+      // are scoped by the local user id.
+      //
+      // Unlike sign-out, verified contacts go too: there is no future
+      // session for them to be useful to.
+      await ref.read(recipientCacheProvider).clear();
+      await ref.read(transferHistoryProvider.notifier).clearAll();
+      await ref.read(verifiedContactsRepoProvider).clearAll();
+
       if (mounted) setState(() => _done = receipt);
     } on ApiException catch (exc) {
       // The server's own text is used verbatim. It distinguishes a wrong

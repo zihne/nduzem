@@ -41,6 +41,42 @@ String _identityLine(AuthSession s) {
 ///   - We render [Fingerprint.display] (5 groups of 5) for humans and
 ///     offer three OOB share paths: read it, copy to clipboard, or show
 ///     as QR.
+/// Sign-out confirmation.
+///
+/// Returns true only on an explicit choice; a barrier tap or back gesture
+/// returns null and is treated as "no".
+Future<bool?> _confirmSignOut(BuildContext context) => showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        scrollable: true,
+        title: const Text('Sign out?'),
+        content: const Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Your transfer history on this device will be deleted. '
+                'That includes what was sent, to whom, and where received '
+                'files were saved. We cannot restore it.'),
+            SizedBox(height: 12),
+            Text('Contacts you have verified are kept, so you will not '
+                'have to check their safety numbers again.'),
+            SizedBox(height: 12),
+            Text('Your encryption key stays on this device.'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Sign out'),
+          ),
+        ],
+      ),
+    );
+
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
 
@@ -64,6 +100,15 @@ class HomeScreen extends ConsumerWidget {
                 case 'settings':
                   context.push('/settings');
                 case 'signout':
+                  // Confirmed because this tap stopped being reversible.
+                  // Sign-out used to lose nothing — sign back in and
+                  // everything returned. It now clears the transfer
+                  // history (ADR-0039), which the server cannot restore,
+                  // including where each received file was saved.
+                  //
+                  // The dialog names what goes and what stays rather than
+                  // asking "are you sure?" about an unnamed consequence.
+                  if (await _confirmSignOut(context) != true) return;
                   await ref.read(authSessionProvider.notifier).clear();
                   if (context.mounted) context.go('/login');
               }

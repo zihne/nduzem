@@ -15,6 +15,8 @@ import '../../crypto/sealed_box.dart';
 import '../../native/saf_saver.dart';
 import '../../storage/secure_storage.dart';
 import '../billing/iap_purchase_service.dart';
+import '../history/transfer_history_provider.dart';
+import '../transfers/recipient_cache.dart';
 import '../transfers/transfer_service.dart';
 import '../verify_contact/verified_contacts_repo.dart';
 import 'auth_repository.dart';
@@ -136,6 +138,17 @@ final verifiedContactsRepoProvider = Provider<VerifiedContactsRepo>((ref) {
   );
 });
 
+/// Resolved-recipient cache (ADR-0039), scoped to the signed-in user for
+/// the same reason the verification list is: two accounts on one device
+/// must not see each other's correspondents. Inert when signed out.
+final recipientCacheProvider = Provider<RecipientCache>((ref) {
+  final session = ref.watch(authSessionProvider).valueOrNull;
+  return RecipientCache(
+    ref.watch(secureStorageProvider),
+    localUserId: session?.userId,
+  );
+});
+
 // --- M2 transfer surface ------------------------------------------------
 
 final transfersApiProvider = FutureProvider<TransfersApi>((ref) async {
@@ -237,6 +250,21 @@ class AuthNotifier extends AsyncNotifier<AuthSession?> {
   }
 
   Future<void> clear() async {
+    // ORDER MATTERS. Both stores are scoped by the local user id, which
+    // comes from the session — so they must be cleared while the session
+    // still exists. After `signOut()` the providers resolve to a null
+    // user and every call short-circuits, leaving the data behind.
+    //
+    // What goes and what stays (ADR-0039): transfer history is cleared,
+    // verified contacts survive. History is the revealing record — "I
+    // sent contract.pdf to alice@example.com on Tuesday" — and cheap to
+    // lose. A verification is the opposite: barely sensitive, and
+    // expensive to recreate, because it means comparing a safety number
+    // out of band. Discarding those on every sign-out is how you teach
+    // people to stop verifying.
+    await ref.read(recipientCacheProvider).clear();
+    await ref.read(transferHistoryProvider.notifier).clearAll();
+
     final repo = await ref.read(authRepositoryProvider.future);
     await repo.signOut();
     state = const AsyncData(null);
