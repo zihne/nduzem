@@ -32,6 +32,16 @@ class TransfersApi {
     required String mode,
     required int byteCount,
     String? recipientId,
+    /// The recipient key fingerprint the caller is about to seal to,
+    /// when it came from the cache rather than a fresh lookup
+    /// (ADR-0039). The server refuses with 409 `recipient_key_changed`
+    /// if the recipient has rotated since — before any bytes are
+    /// uploaded, which for a 10 GB transfer is the difference between
+    /// one wasted round-trip and the whole operation.
+    ///
+    /// Null after a fresh lookup: there is nothing to check, the value
+    /// was just read from the server.
+    String? recipientKeyFingerprint,
     String? linkPassword,
     String? recipientEmail,
     int cryptoSuite = 1,
@@ -49,6 +59,9 @@ class TransfersApi {
       'max_downloads': maxDownloads,
     };
     if (recipientId != null) payload['recipient_id'] = recipientId;
+    if (recipientKeyFingerprint != null) {
+      payload['recipient_key_fingerprint'] = recipientKeyFingerprint;
+    }
     if (linkPassword != null) payload['link_password'] = linkPassword;
     if (recipientEmail != null) payload['recipient_email'] = recipientEmail;
 

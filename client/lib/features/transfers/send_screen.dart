@@ -56,6 +56,12 @@ class _SendScreenState extends ConsumerState<SendScreen> {
   final List<PickedFile> _batchFiles = <PickedFile>[];
   UserLookup? _recipient;
   Fingerprint? _recipientFp;
+
+  /// True when [_recipient] came from the cache rather than the network.
+  /// Only then do we send the fingerprint to `/initiate` — after a fresh
+  /// lookup there is nothing to check, the value came from the server a
+  /// moment ago.
+  bool _recipientFromCache = false;
   VerifiedContact? _priorVerification;
 
   /// Which end-to-end send path the UI is composed for (ADR-0005).
@@ -181,12 +187,82 @@ class _SendScreenState extends ConsumerState<SendScreen> {
     return picked;
   }
 
-  Future<void> _lookupRecipient() async {
+  /// Try the cache. Returns true when the recipient was resolved from it
+  /// and no network lookup is needed.
+  ///
+  /// Every check the network path makes is repeated here, because a
+  /// cached entry is not more trustworthy than a fresh one — it is the
+  /// same data, older:
+  ///
+  ///  * the fingerprint is RECOMPUTED from the stored keys rather than
+  ///    read back as text, so a corrupted or edited entry cannot supply a
+  ///    fingerprint that does not belong to its keys;
+  ///  * the prior-verification check runs identically, so a contact whose
+  ///    key changed since you verified them still stops the send.
+  ///
+  /// Any failure falls through to the network, which is always correct
+  /// and merely slower.
+  Future<bool> _resolveFromCache(RecipientQuery query) async {
+    try {
+      final cached = await ref.read(recipientCacheProvider).read(query.value);
+      if (cached == null) return false;
+
+      final localFp = fingerprintOf(
+        identityPublic: cached.identityPublic,
+        signingPublic: cached.signingPublic,
+      );
+      if (!localFp.matches(cached.fingerprint)) {
+        // The stored keys and the stored fingerprint disagree. Something
+        // rewrote the entry. Drop it and ask the server.
+        await ref.read(recipientCacheProvider).forget(query.value);
+        return false;
+      }
+
+      final prior =
+          await ref.read(verifiedContactsRepoProvider).read(cached.userId);
+      if (prior != null && !localFp.matches(prior.canonical)) {
+        setState(
+          () => _error =
+              "This contact's fingerprint has changed since you verified "
+              'them on ${prior.at.toLocal().toString().split('.').first}. '
+              'Re-verify at "Verify a contact" before sending.',
+        );
+        return true; // resolved, in the sense that we must not continue
+      }
+
+      setState(() {
+        _recipient = UserLookup(
+          userId: cached.userId,
+          identityPublic: cached.identityPublic,
+          signingPublic: cached.signingPublic,
+          serverKeyFingerprint: cached.fingerprint,
+        );
+        _recipientFp = localFp;
+        _priorVerification = prior;
+        _recipientFromCache = true;
+        _busy = false;
+      });
+      return true;
+    } on Object {
+      // Storage unreadable — the same BAD_DECRYPT case the network path
+      // guards against. Fall through rather than fail: the lookup still
+      // works, it just costs a request.
+      return false;
+    }
+  }
+
+  /// Resolve the recipient, from cache when possible (ADR-0039).
+  ///
+  /// [bypassCache] is set when the server has told us the cached key is
+  /// stale, so the retry cannot read the same entry straight back.
+  Future<void> _lookupRecipient({bool bypassCache = false}) async {
     final query = RecipientQuery.parse(_lookup.text);
     if (query == null) {
       setState(() => _error = 'Enter the recipient email or @handle.');
       return;
     }
+
+    if (!bypassCache && await _resolveFromCache(query)) return;
     setState(() {
       _busy = true;
       _error = null;
@@ -227,10 +303,26 @@ class _SendScreenState extends ConsumerState<SendScreen> {
         return;
       }
 
+      // Cache only AFTER every check above has passed: the server's
+      // claimed fingerprint matched what we computed, and the contact's
+      // key has not changed since any prior verification. Caching earlier
+      // would launder an unchecked value into a trusted one on the next
+      // read.
+      //
+      // The fingerprint stored is OURS, not `res.serverKeyFingerprint`.
+      await ref.read(recipientCacheProvider).write(
+            address: query.value,
+            userId: res.userId,
+            identityPublic: res.identityPublic,
+            signingPublic: res.signingPublic,
+            fingerprint: localFp.canonical,
+          );
+
       setState(() {
         _recipient = res;
         _recipientFp = localFp;
         _priorVerification = prior;
+        _recipientFromCache = false;
       });
     } on ApiException catch (exc) {
       setState(() => _error = exc.message);
@@ -323,6 +415,13 @@ class _SendScreenState extends ConsumerState<SendScreen> {
       final result = await svc.send(
         mode: _mode,
         recipient: _mode == SendMode.app ? _recipient : null,
+        // Only when the recipient came from the cache. After a fresh
+        // lookup there is nothing to validate — the server told us this
+        // fingerprint moments ago.
+        recipientKeyFingerprint:
+            _mode == SendMode.app && _recipientFromCache
+                ? _recipientFp?.canonical
+                : null,
         source: file.source,
         linkPassword: _mode == SendMode.link && linkPassword.isNotEmpty
             ? linkPassword
@@ -413,6 +512,28 @@ class _SendScreenState extends ConsumerState<SendScreen> {
         _error = exc.message;
         _quotaError = exc;
       });
+    } on RecipientKeyChangedException {
+      // ADR-0039: the recipient rotated their key since we cached it.
+      // The server caught it at /initiate, so nothing was uploaded.
+      //
+      // Drop the entry and resolve again from the network, bypassing the
+      // cache. That re-run is not a retry loop — it is the full lookup
+      // path, which recomputes the fingerprint, rejects a server claim
+      // that disagrees with the keys, and STOPS with a warning if this
+      // contact was previously verified. Delegating to it is why the
+      // key-change rule is not reimplemented here: one copy of it, on the
+      // path the user already relies on.
+      await ref.read(recipientCacheProvider).forget(_lookup.text.trim());
+      if (!mounted) return;
+      setState(() {
+        _error = "This recipient's encryption key has changed. Checking "
+            'their new key — nothing was sent.';
+        _recipient = null;
+        _recipientFp = null;
+        _recipientFromCache = false;
+      });
+      await _lookupRecipient(bypassCache: true);
+      return;
     } on ApiException catch (exc) {
       // Stay on-screen so the user can retry without re-picking.
       setState(() => _error = exc.message);
