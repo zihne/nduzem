@@ -135,6 +135,31 @@ class VerifiedContactsRepo {
     // a future migration doesn't resurrect stale data.
     await _store.delete(_legacyKeyFor(userId));
   }
+
+  /// Drop every verification for the current local user.
+  ///
+  /// For ACCOUNT ERASURE only. Sign-out deliberately leaves these
+  /// (ADR-0039): a verification is barely sensitive on its own — "I
+  /// checked someone's safety number" — but expensive to recreate,
+  /// because recreating it means comparing that number out of band
+  /// again. Discarding them on every sign-out is how you train people to
+  /// stop verifying, and a protection people route around is worse than
+  /// none.
+  ///
+  /// Erasure is different: there is no future session for them to serve,
+  /// and the list is a record of who the user knew.
+  ///
+  /// Scoped to this local user — another account's verifications on a
+  /// shared device are not ours to remove.
+  Future<void> clearAll() async {
+    final localUid = localUserId;
+    if (localUid == null) return;
+    final all = await _store.readAll();
+    final mine = all.keys.where((k) => k.startsWith('$_prefix$localUid.'));
+    for (final k in mine) {
+      await _store.delete(k);
+    }
+  }
 }
 
 class VerifiedContact {
