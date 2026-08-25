@@ -181,6 +181,33 @@ class AuthApi {
           (body['recovery_codes'] as List<dynamic>).cast<String>().toList(),
     );
   }
+
+  /// Turn two-factor off.
+  ///
+  /// Requires the account password AND a second factor — either a current
+  /// TOTP or one of the recovery codes. Both, deliberately: disabling the
+  /// second factor is not a lesser act than rotating an identity key, and
+  /// the password is what stops someone holding only stolen session
+  /// tokens from removing it. The server enforces this and rate-limits the
+  /// endpoint; sending only a code returns 422.
+  ///
+  /// Returns the resulting state, which is `false` on success.
+  Future<bool> mfaDisable({
+    required String password,
+    required String code,
+    bool isRecoveryCode = false,
+  }) async {
+    final body = await _client.post(
+      '/v1/auth/mfa/disable',
+      body: {
+        'password': password,
+        'code': code,
+        'is_recovery_code': isRecoveryCode,
+      },
+      authed: true,
+    );
+    return body['mfa_enabled'] as bool;
+  }
 }
 
 // --- domain types -------------------------------------------------------

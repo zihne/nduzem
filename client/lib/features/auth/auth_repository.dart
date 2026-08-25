@@ -415,6 +415,27 @@ class AuthRepository implements TokenSource {
   Future<MfaEnrollConfirmResult> mfaEnrollConfirm({required String code}) =>
       _api.mfaEnrollConfirm(code: code);
 
+  /// Turn two-factor off. Requires the account password AND a second
+  /// factor — see [AuthApi.mfaDisable] for why both.
+  ///
+  /// Persists the flag on success so the home screen shows "Enable
+  /// two-factor" again without waiting for a `/me` refresh. The local
+  /// write happens only when the server confirms, so a failed attempt
+  /// cannot desynchronise the two.
+  Future<bool> mfaDisable({
+    required String password,
+    required String code,
+    bool isRecoveryCode = false,
+  }) async {
+    final stillEnabled = await _api.mfaDisable(
+      password: password,
+      code: code,
+      isRecoveryCode: isRecoveryCode,
+    );
+    if (!stillEnabled) await _writeMfaEnabled(false);
+    return stillEnabled;
+  }
+
   // --- sign out ------------------------------------------------------------
 
   /// Session-level sign-out: clears tokens + the MFA-enabled flag so the

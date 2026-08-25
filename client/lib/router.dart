@@ -11,6 +11,7 @@ import 'features/auth/key_backup_screen.dart';
 import 'features/auth/restore_key_screen.dart';
 import 'features/auth/rotate_key_screen.dart';
 import 'features/auth/totp_challenge_screen.dart';
+import 'features/auth/disable_mfa_screen.dart';
 import 'features/auth/totp_enroll_screen.dart';
 import 'features/auth/verify_email_screen.dart';
 import 'features/billing/paywall_screen.dart';
@@ -113,6 +114,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/mfa/enroll',
         builder: (_, __) => const TotpEnrollScreen(),
+      ),
+      GoRoute(
+        path: '/mfa/disable',
+        builder: (_, __) => const DisableMfaScreen(),
       ),
       // M2.5 out-of-band contact verification.
       GoRoute(

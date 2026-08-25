@@ -69,6 +69,31 @@ class SettingsScreen extends ConsumerWidget {
               ),
               const Divider(),
             ],
+            // Two-factor sits above the encryption key because it guards
+            // ACCOUNT access — the outer of the two doors. Shown only
+            // when enabled: the enrol path already lives on the home
+            // screen, and offering both here would put "turn on" and
+            // "turn off" side by side.
+            if (session?.mfaEnabled ?? false) ...[
+              _sectionLabel(theme, 'Two-factor authentication'),
+              ListTile(
+                leading: const Icon(Icons.shield_outlined),
+                title: const Text('Two-factor is on'),
+                subtitle: const Text(
+                  'Sign-in needs a code from your authenticator as well as '
+                  'your password.',
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.shield_moon_outlined),
+                title: const Text('Turn off two-factor'),
+                subtitle: const Text(
+                  'Needs your password and a code, or a recovery code.',
+                ),
+                onTap: () => context.push('/mfa/disable'),
+              ),
+              const Divider(),
+            ],
             _sectionLabel(theme, 'Encryption key'),
             ListTile(
               leading: const Icon(Icons.backup_outlined),
