@@ -53,6 +53,13 @@ class _KeyBackupScreenState extends ConsumerState<KeyBackupScreen> {
       // again immediately after the user acted on it.
       ref.invalidate(keyBackupStatusProvider);
       if (mounted) setState(() => _created = key);
+    } on SupersededKeyBackup catch (exc) {
+      // Caught explicitly rather than falling into a generic handler: the
+      // whole value of this refusal is that it tells the user WHICH key
+      // is which and what to do about it. Reduced to "backup failed", it
+      // would be worse than the bug it replaces — the user would retry,
+      // fail again, and learn nothing.
+      setState(() => _error = exc.toString());
     } on ApiException catch (exc) {
       setState(() => _error = exc.message);
     } on StateError catch (exc) {

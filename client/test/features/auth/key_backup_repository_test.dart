@@ -145,6 +145,73 @@ Future<void> main() async {
 
       // --- restore -------------------------------------------------
 
+      test('backing up a superseded key is refused, and uploads nothing',
+          () async {
+        // THE BUG THIS FIXES. Validation used to exist only on restore,
+        // so a device that missed a rotation performed elsewhere would
+        // wrap its dead keypair, upload it, and report success. The user
+        // found out at restore — later, on another device, with no
+        // alternative left.
+        //
+        // The directory advertises a different keypair than this device
+        // holds, which is exactly the post-rotation state.
+        _stubDirectory(usersApi, keys.generate());
+
+        await expectLater(
+          repo.createKeyBackup(password: 'pw'),
+          throwsA(isA<SupersededKeyBackup>()),
+        );
+        expect(
+          uploadedBlob,
+          isNull,
+          reason: 'a doomed backup must not reach the server — leaving one '
+              'there would overwrite a good backup with a useless one',
+        );
+      });
+
+      test('the refusal names both keys, so the user can act', () async {
+        // Reduced to "backup failed" this is worse than the bug: the user
+        // retries, fails again, and learns nothing. They need to know
+        // which key this device has and which the account uses, because
+        // the fix is to back up from the OTHER device.
+        _stubDirectory(usersApi, keys.generate());
+
+        try {
+          await repo.createKeyBackup(password: 'pw');
+          fail('expected a refusal');
+        } on SupersededKeyBackup catch (exc) {
+          expect(exc.deviceFingerprint, isNotEmpty);
+          expect(exc.publishedFingerprint, isNotEmpty);
+          expect(exc.deviceFingerprint, isNot(exc.publishedFingerprint));
+          expect(exc.toString(), contains(exc.deviceFingerprint));
+          expect(exc.toString(), contains(exc.publishedFingerprint));
+        }
+      });
+
+      test('backing up the CURRENT key still works', () async {
+        // The check must not break the ordinary case: this device holds
+        // the keypair the account publishes.
+        _stubDirectory(usersApi, pair);
+
+        final recovery = await repo.createKeyBackup(password: 'pw');
+        expect(recovery, isNotNull);
+        expect(uploadedBlob, isNotNull);
+      });
+
+      test('an unreachable directory does not block taking a backup',
+          () async {
+        // Same tolerance as restore. Someone taking a backup may well be
+        // doing so BECAUSE something is already wrong; refusing on a
+        // failed lookup would deny them protection at the moment they are
+        // trying to obtain it. The worst case is a backup that fails the
+        // check later at restore, which is where we started — no worse.
+        when(() => usersApi.me()).thenThrow(Exception('offline'));
+
+        final recovery = await repo.createKeyBackup(password: 'pw');
+        expect(recovery, isNotNull);
+        expect(uploadedBlob, isNotNull);
+      });
+
       test('restoring persists all four key halves', () async {
         final recovery = await repo.createKeyBackup(password: 'pw');
         written.clear();

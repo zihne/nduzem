@@ -267,6 +267,37 @@ class RecoveryKeyMismatch implements Exception {
 }
 
 
+/// Refused at BACKUP time: this device holds a keypair the account no
+/// longer advertises, so backing it up would preserve the wrong key.
+///
+/// The mirror of [StaleKeyBackup], and it exists because that check used
+/// to be the only one. A device that missed a rotation performed
+/// elsewhere would wrap its superseded keypair, upload it, and report
+/// success — and the user would find out at restore, which is later, on
+/// another device, when they have no alternative left.
+///
+/// Refusing here costs the user a confusing moment while they still hold
+/// options. Refusing at restore costs them the account's history.
+class SupersededKeyBackup implements Exception {
+  const SupersededKeyBackup({
+    required this.deviceFingerprint,
+    required this.publishedFingerprint,
+  });
+
+  /// What this device would have backed up.
+  final String deviceFingerprint;
+
+  /// What the account actually publishes, and what senders seal to.
+  final String publishedFingerprint;
+
+  @override
+  String toString() =>
+      'This device holds an older key ($deviceFingerprint). Your account '
+      'now uses $publishedFingerprint, so a backup taken here would not '
+      'open anything. Your key was most likely replaced on another '
+      'device — back up from that one, or restore this device first.';
+}
+
 /// The backup opened correctly, but holds a keypair the account no
 /// longer advertises.
 ///

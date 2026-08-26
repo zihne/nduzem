@@ -600,6 +600,32 @@ class AuthRepository implements TokenSource {
       signingPublic: pair.signingPublic,
     ).canonical;
 
+    // Refuse to back up a key the account no longer publishes.
+    //
+    // This check used to exist only on RESTORE, and the asymmetry was the
+    // bug: a device holding a superseded keypair — rotation happened
+    // elsewhere, and this device has not learned of it — could produce a
+    // backup that was already useless, upload it, and report success. The
+    // user discovered it at restore time, which is months later, on a
+    // different device, at the one moment they have no alternative.
+    //
+    // Failing here instead is strictly better: the working key is still
+    // in front of them and they can act. Failing at restore is finding
+    // out the parachute does not open.
+    //
+    // Same source as the restore check — derived from the public key
+    // BYTES the directory returns, not the server's claimed fingerprint —
+    // and the same tolerance: an unreachable directory returns null and
+    // does not block the backup. Someone taking a backup may well be
+    // doing so because something is already wrong.
+    final published = await _publishedFingerprint();
+    if (published != null && published != fingerprint) {
+      throw SupersededKeyBackup(
+        deviceFingerprint: Fingerprint(fingerprint).display,
+        publishedFingerprint: Fingerprint(published).display,
+      );
+    }
+
     final blob = wrapKeypairForBackup(
       sodium: sodium,
       recovery: recovery,
