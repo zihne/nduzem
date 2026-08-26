@@ -267,6 +267,32 @@ class RecoveryKeyMismatch implements Exception {
 }
 
 
+/// Refused at RESTORE time: the directory could not be reached to check
+/// the backup, and this device already holds a working keypair.
+///
+/// Restoring overwrites all four key slots. Proceeding without the check
+/// is deliberate when the device has NOTHING — someone recovering a wiped
+/// phone must not be blocked by a directory they cannot reach. But that
+/// tolerance is about having nothing to lose. Where a good keypair is
+/// already present, an unverified restore can only make things worse, and
+/// the loss would surface later as "nothing decrypts any more".
+///
+/// The remedy is ordinarily just to try again with a connection.
+class UnverifiableRestore implements Exception {
+  const UnverifiableRestore({required this.backupFingerprint});
+
+  /// What the backup holds. Shown so the user can compare it against the
+  /// key this device already has before deciding anything.
+  final String backupFingerprint;
+
+  @override
+  String toString() =>
+      'This device already holds a key, and we could not reach the '
+      'directory to check whether the backup ($backupFingerprint) is still '
+      'the right one. Restoring now could replace a working key with an '
+      'old one. Try again when you have a connection.';
+}
+
 /// Refused at BACKUP time: this device holds a keypair the account no
 /// longer advertises, so backing it up would preserve the wrong key.
 ///

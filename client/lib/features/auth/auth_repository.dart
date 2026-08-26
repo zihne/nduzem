@@ -687,6 +687,25 @@ class AuthRepository implements TokenSource {
       );
     }
 
+    // UNVERIFIED restore onto a device that already holds keys: refuse.
+    //
+    // `_persistKeypair` below overwrites all four key slots. Skipping the
+    // staleness check is right when the device has NOTHING — someone
+    // recovering a wiped phone should not be blocked by a directory they
+    // cannot reach. But that justification is about having nothing to
+    // lose, and it evaporates the moment the device holds a working key:
+    // an unverified restore would then replace a good keypair with one we
+    // could not confirm, and the user would discover it the next time
+    // something failed to decrypt.
+    //
+    // The restore screen is reachable from Settings on a perfectly
+    // healthy device, so this is not a hypothetical path.
+    if (published == null && await _loadKeypair(userId) != null) {
+      throw UnverifiableRestore(
+        backupFingerprint: derived.display,
+      );
+    }
+
     await _persistKeypair(userId: userId, pair: restored.pair);
     await _storage.write(SecureStore.kFingerprint, derived.canonical);
     return restored;
@@ -733,9 +752,20 @@ class AuthRepository implements TokenSource {
   Future<String?> _publishedFingerprint() async {
     try {
       final me = await _usersApi.me();
-      final handle = me.handle;
-      if (handle == null) return null;
-      final found = await _usersApi.lookup(handle: handle);
+      // Handles are OPTIONAL — `users.handle_enc` is nullable, and
+      // registration does not require one. This used to read
+      // `if (handle == null) return null`, which silently disabled the
+      // staleness check for every user who never chose a handle: not a
+      // weaker check, no check at all, and no way for them to know.
+      //
+      // The lookup accepts either identifier, so fall back to the email
+      // address, which every account has.
+      // `email` is "" for an erased account, which would produce a lookup
+      // the server rejects. Nothing to verify against in that case.
+      if (me.handle == null && me.email.isEmpty) return null;
+      final found = me.handle != null
+          ? await _usersApi.lookup(handle: me.handle)
+          : await _usersApi.lookup(email: me.email);
       // Derive from the returned PUBLIC KEY BYTES rather than reading
       // the server's own `serverKeyFingerprint` field. The lookup
       // returns raw key bytes for exactly this reason: taking the

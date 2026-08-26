@@ -60,6 +60,12 @@ class _RestoreKeyScreenState extends ConsumerState<RestoreKeyScreen> {
       // "Check what you typed" — distinct from the two below, because
       // the user's next action is different in each case.
       setState(() => _error = exc.toString());
+    } on UnverifiableRestore catch (exc) {
+      // Distinct from StaleKeyBackup: nothing is wrong with the backup,
+      // we simply could not check it, and this device has something to
+      // lose. Telling the user to retry with a connection is actionable;
+      // a generic failure would leave them assuming the backup is broken.
+      setState(() => _error = exc.toString());
     } on StaleKeyBackup catch (exc) {
       setState(() => _error = exc.toString());
     } on FormatException catch (exc) {
