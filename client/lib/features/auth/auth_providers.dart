@@ -249,21 +249,42 @@ class AuthNotifier extends AsyncNotifier<AuthSession?> {
     state = AsyncData(current.copyWith(mfaEnabled: value));
   }
 
-  Future<void> clear() async {
-    // ORDER MATTERS. Both stores are scoped by the local user id, which
-    // comes from the session — so they must be cleared while the session
-    // still exists. After `signOut()` the providers resolve to a null
-    // user and every call short-circuits, leaving the data behind.
-    //
-    // What goes and what stays (ADR-0039): transfer history is cleared,
-    // verified contacts survive. History is the revealing record — "I
-    // sent contract.pdf to alice@example.com on Tuesday" — and cheap to
-    // lose. A verification is the opposite: barely sensitive, and
-    // expensive to recreate, because it means comparing a safety number
-    // out of band. Discarding those on every sign-out is how you teach
-    // people to stop verifying.
+  /// Sign out. [clearHistory] deletes this device's transfer history —
+  /// the user's choice, made in the sign-out dialog.
+  ///
+  /// It is a choice rather than a policy because clearing it
+  /// unconditionally was the wrong trade in both directions.
+  ///
+  /// It bought little: history is already scoped per user
+  /// (`transfer_history.<userId>.json`), so signing in as someone else
+  /// cannot reveal it. The only real exposure is device-level — seizure,
+  /// loss, resale — and signing out does nothing about that, because the
+  /// file sits on disk either way until something deletes it.
+  ///
+  /// And it cost something real: a user who wants to keep their records
+  /// learns not to sign out. Staying signed in on a borrowed laptop is a
+  /// far worse outcome than a retained history, so a control that
+  /// discourages signing out defeats its own purpose.
+  ///
+  /// ORDER MATTERS. Both stores are scoped by the local user id, which
+  /// comes from the session — so anything to be cleared must be cleared
+  /// while the session still exists. After `signOut()` the providers
+  /// resolve to a null user and every call short-circuits, leaving the
+  /// data behind.
+  Future<void> clear({bool clearHistory = false}) async {
+    // The cache goes unconditionally: it is an address book with a
+    // 30-day TTL that silently rebuilds itself, so there is nothing for
+    // a user to lose and a prompt would be noise.
     await ref.read(recipientCacheProvider).clear();
-    await ref.read(transferHistoryProvider.notifier).clearAll();
+
+    if (clearHistory) {
+      await ref.read(transferHistoryProvider.notifier).clearAll();
+    }
+
+    // Verified contacts survive either way (ADR-0039). Barely sensitive
+    // on their own, and expensive to recreate — it means comparing a
+    // safety number out of band again. Discarding them on every sign-out
+    // is how you teach people to stop verifying.
 
     final repo = await ref.read(authRepositoryProvider.future);
     await repo.signOut();

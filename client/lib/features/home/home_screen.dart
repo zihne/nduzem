@@ -45,37 +45,76 @@ String _identityLine(AuthSession s) {
 ///
 /// Returns true only on an explicit choice; a barrier tap or back gesture
 /// returns null and is treated as "no".
-Future<bool?> _confirmSignOut(BuildContext context) => showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
+/// What the user chose in the sign-out dialog.
+///
+/// Null is a dismissal — a barrier tap or back gesture — and must not be
+/// read as consent to anything.
+class _SignOutChoice {
+  const _SignOutChoice({required this.clearHistory});
+  final bool clearHistory;
+}
+
+/// Sign-out confirmation, offering to clear this device's transfer
+/// history rather than doing it unconditionally.
+///
+/// **Default: unchecked.** Most people accept a default, so its initial
+/// state is the real policy, and destroying someone's own records is the
+/// wrong thing to do by default when it buys so little: history is
+/// already scoped per user, so signing in as someone else cannot reveal
+/// it. The exposure is device-level, and signing out does nothing about
+/// that.
+///
+/// Clearing unconditionally also taught the wrong lesson — a user who
+/// wanted to keep their records learned not to sign out, and staying
+/// signed in on a borrowed machine is much worse than a retained
+/// history.
+///
+/// Someone who does want it gone ticks the box, and there is a manual
+/// "Clear history" on the history screen for the deliberate case.
+Future<_SignOutChoice?> _confirmSignOut(BuildContext context) {
+  var clearHistory = false;
+  return showDialog<_SignOutChoice>(
+    context: context,
+    builder: (dialogContext) => StatefulBuilder(
+      builder: (context, setState) => AlertDialog(
         scrollable: true,
         title: const Text('Sign out?'),
-        content: const Column(
+        content: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('Your transfer history on this device will be deleted. '
-                'That includes what was sent, to whom, and where received '
-                'files were saved. We cannot restore it.'),
-            SizedBox(height: 12),
-            Text('Contacts you have verified are kept, so you will not '
-                'have to check their safety numbers again.'),
-            SizedBox(height: 12),
-            Text('Your encryption key stays on this device.'),
+            const Text('Your encryption key and the contacts you have '
+                'verified stay on this device, so signing back in picks up '
+                'where you left off.'),
+            const SizedBox(height: 12),
+            CheckboxListTile(
+              value: clearHistory,
+              onChanged: (v) => setState(() => clearHistory = v ?? false),
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              title: const Text('Also delete my transfer history'),
+              subtitle: const Text(
+                'What was sent, to whom, and where received files were '
+                'saved. This cannot be undone.',
+              ),
+            ),
           ],
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
+            onPressed: () => Navigator.of(dialogContext).pop(),
             child: const Text('Cancel'),
           ),
           TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
+            onPressed: () => Navigator.of(dialogContext)
+                .pop(_SignOutChoice(clearHistory: clearHistory)),
             child: const Text('Sign out'),
           ),
         ],
       ),
-    );
+    ),
+  );
+}
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -108,8 +147,11 @@ class HomeScreen extends ConsumerWidget {
                   //
                   // The dialog names what goes and what stays rather than
                   // asking "are you sure?" about an unnamed consequence.
-                  if (await _confirmSignOut(context) != true) return;
-                  await ref.read(authSessionProvider.notifier).clear();
+                  final choice = await _confirmSignOut(context);
+                  if (choice == null) return;
+                  await ref
+                      .read(authSessionProvider.notifier)
+                      .clear(clearHistory: choice.clearHistory);
                   if (context.mounted) context.go('/login');
               }
             },
