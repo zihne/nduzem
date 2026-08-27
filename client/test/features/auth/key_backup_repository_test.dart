@@ -269,13 +269,98 @@ Future<void> main() async {
         // Someone restoring is often doing so because things are
         // broken. The unwrap is authenticated on its own, so a lookup
         // failure must not be the thing that stops them.
+        //
+        // The device is emptied first. That is not a concession to the
+        // `UnverifiableRestore` check — it is what this test always meant.
+        // "Recovery" presupposes having nothing to recover FROM, and the
+        // fixture previously left setUp's keypair in place by accident,
+        // so it was really asserting that an unverified restore may
+        // overwrite a WORKING key. That is the hazard, not the guarantee.
+        // Back up while the keys are still here, THEN lose them — which
+        // is also the real sequence a user lives through.
         final recovery = await repo.createKeyBackup(password: 'pw');
         when(() => usersApi.getKeyBackupBlob())
             .thenAnswer((_) async => uploadedBlob);
         when(() => usersApi.me()).thenThrow(Exception('offline'));
+        for (final slot in [
+          SecureStore.identityPrivateKeyFor(userId),
+          SecureStore.identityPublicKeyFor(userId),
+          SecureStore.signingPrivateKeyFor(userId),
+          SecureStore.signingPublicKeyFor(userId),
+        ]) {
+          when(() => store.readBytes(slot)).thenAnswer((_) async => null);
+        }
 
         final restored = await repo.restoreFromKeyBackup(recovery);
         expect(restored.pair.identityPrivate, pair.identityPrivate);
+      });
+
+      test('an unverifiable restore is refused when the device has keys',
+          () async {
+        // The mirror hazard. `_persistKeypair` overwrites all four slots,
+        // and the restore screen is reachable from Settings on a HEALTHY
+        // device. Skipping the check there could replace a working key
+        // with an unverified one, and the loss surfaces later as
+        // "nothing decrypts any more".
+        final recovery = await repo.createKeyBackup(password: 'pw');
+        written.clear();
+        when(() => usersApi.getKeyBackupBlob())
+            .thenAnswer((_) async => uploadedBlob);
+        when(() => usersApi.me()).thenThrow(Exception('offline'));
+        // setUp leaves this device holding `pair`.
+
+        await expectLater(
+          repo.restoreFromKeyBackup(recovery),
+          throwsA(isA<UnverifiableRestore>()),
+        );
+        expect(
+          written,
+          isEmpty,
+          reason: 'a working keypair must not be overwritten by a restore '
+              'we could not verify',
+        );
+      });
+
+      test('an unverifiable restore PROCEEDS when the device has nothing',
+          () async {
+        // The case the tolerance exists for: a wiped device, a directory
+        // that cannot be reached, and nothing to lose. Refusing here
+        // would block recovery at the one moment it is needed.
+        final recovery = await repo.createKeyBackup(password: 'pw');
+        when(() => usersApi.getKeyBackupBlob())
+            .thenAnswer((_) async => uploadedBlob);
+        when(() => usersApi.me()).thenThrow(Exception('offline'));
+        // This device holds no keys.
+        for (final slot in [
+          SecureStore.identityPrivateKeyFor(userId),
+          SecureStore.identityPublicKeyFor(userId),
+          SecureStore.signingPrivateKeyFor(userId),
+          SecureStore.signingPublicKeyFor(userId),
+        ]) {
+          when(() => store.readBytes(slot)).thenAnswer((_) async => null);
+        }
+
+        final restored = await repo.restoreFromKeyBackup(recovery);
+        expect(restored.pair.identityPrivate, pair.identityPrivate);
+      });
+
+      test('the staleness check works for an account with no handle',
+          () async {
+        // Handles are OPTIONAL. `_publishedFingerprint` used to bail out
+        // when one was absent, which silently disabled this check — and
+        // the backup-side check — for every user who never chose a
+        // handle. Not a weaker check: none at all, invisibly.
+        final recovery = await repo.createKeyBackup(password: 'pw');
+        written.clear();
+        when(() => usersApi.getKeyBackupBlob())
+            .thenAnswer((_) async => uploadedBlob);
+        _stubDirectory(usersApi, keys.generate(), handle: null);
+
+        await expectLater(
+          repo.restoreFromKeyBackup(recovery),
+          throwsA(isA<StaleKeyBackup>()),
+          reason: 'the check must fall back to the email address',
+        );
       });
 
       test('restoring with no backup on the account says so', () async {
@@ -292,12 +377,16 @@ Future<void> main() async {
 
 /// Make `lookup` return the public halves of [pair], as the directory
 /// would for an account using it.
-void _stubDirectory(_FakeUsersApi usersApi, IdentityKeypair pair) {
+void _stubDirectory(
+  _FakeUsersApi usersApi,
+  IdentityKeypair pair, {
+  String? handle = 'alice',
+}) {
   when(() => usersApi.me()).thenAnswer(
     (_) async => UserMe(
       userId: 'user-1',
       email: 'a@example.com',
-      handle: 'alice',
+      handle: handle,
       emailVerified: true,
       mfaEnabled: false,
       isAdmin: false,
@@ -305,7 +394,12 @@ void _stubDirectory(_FakeUsersApi usersApi, IdentityKeypair pair) {
       erasedAt: null,
     ),
   );
-  when(() => usersApi.lookup(handle: any(named: 'handle'))).thenAnswer(
+  when(
+    () => usersApi.lookup(
+      handle: any(named: 'handle'),
+      email: any(named: 'email'),
+    ),
+  ).thenAnswer(
     (_) async => UserLookup(
       userId: 'user-1',
       identityPublic: pair.identityPublic,
