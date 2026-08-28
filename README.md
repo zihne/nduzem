@@ -6,9 +6,12 @@ to whom and how big the blob was, but cannot see the file contents,
 filename, or type. All cryptography happens on the user's device.
 
 This repository contains the **client and verification artifacts**:
-- [client/](client/) — Flutter app (iOS + Android). Apache-2.0 licensed.
-- [provability/](provability/) — reproducible-build pipeline, audit reports
-  (when available), transparency reports, and warrant canary.
+- [client/](client/) — Flutter app: **Android and web** shipped, **iOS under
+  construction**. Apache-2.0 licensed.
+- [provability/](provability/) — scaffolding for reproducible builds, audit
+  reports and transparency signals. **None of it is operational yet**; see
+  [provability/README.md](provability/README.md) for the status of each and
+  what closing the gap takes.
 
 The backend (FastAPI conduit + infrastructure) is **not** open source.
 
