@@ -21,6 +21,14 @@ NDUZEM_API_BASE=https://api.nduzem.com scripts/build-release.sh
 
 ### What it checks, in order
 
+0. The git work tree is **clean**, and the commit is recorded. A dirty
+   tree is refused: the release tag claims "this commit produced that
+   AAB", and a build from uncommitted changes makes that false with
+   nothing afterwards to reveal it. Untracked files count — an untracked
+   `.dart` under `lib/` compiles in exactly like a tracked one.
+   The commit is also threaded into the binary as
+   `NDUZEM_GIT_COMMIT`, so the link is carried by the artefact rather
+   than inferred from a build timestamp.
 1. Flutter is on PATH.
 2. `android/key.properties` exists and its `storeFile` points at a
    real `.jks`. (Without this, `flutter build appbundle` silently
@@ -37,9 +45,11 @@ NDUZEM_API_BASE=https://api.nduzem.com scripts/build-release.sh
    `com.google.android.gms.permission.AD_ID`. (See the compliance
    doc on the server for the fallback recipe if a future dep injects
    it.)
-10. Prints a summary: AAB path, size, version, signing SHA-256, and
-    the "next steps" checklist (assetlinks.json update reminder +
-    upload path).
+10. Prints a summary: AAB path, size, version, source commit, signing
+    SHA-256, and the "next steps" checklist — assetlinks.json reminder,
+    upload path, and the exact `git tag` command pinned to the commit
+    that was built. Tag conventions live in
+    `provability/reproducible-build/README.md`.
 
 Any check failure exits non-zero with a message on stderr explaining
 what to fix. On success, the AAB is ready to upload to Play Console.

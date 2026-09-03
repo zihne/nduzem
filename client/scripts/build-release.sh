@@ -12,16 +12,18 @@
 #   4. `flutter pub get` — fetch deps.
 #   5. `flutter analyze` — must be clean.
 #   6. `flutter test` — full suite must pass.
-#   7. `flutter build appbundle --release` with the API base URL
-#      threaded through as a `--dart-define`.
+#   0. Verify the git work tree is clean and record the commit, so the
+#      release tag names what was actually built.
+#   7. `flutter build appbundle --release` with the API base URL and
+#      the source commit threaded through as `--dart-define`s.
 #   8. Verify the AAB is signed with a release cert (NOT the debug
 #      cert `CN=Android Debug`).
 #   9. Verify the merged Android manifest does NOT declare
 #      `com.google.android.gms.permission.AD_ID` — Play Console
 #      blocks releases whose declared "advertising ID: no" answer
 #      disagrees with the shipped manifest.
-#  10. Print AAB path, size, version, signing SHA-256, and next
-#      steps (assetlinks.json + upload).
+#  10. Print AAB path, size, version, source commit, signing SHA-256,
+#      and next steps (assetlinks.json + upload + tag).
 #
 # Exit code 0 means the AAB at
 # `build/app/outputs/bundle/release/app-release.aab` is ready to
@@ -116,6 +118,36 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLIENT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$CLIENT_ROOT"
 
+# --- 0. Git state ------------------------------------------------------
+#
+# The release tag says "this commit produced that AAB". Nothing enforced
+# it: the build ran happily from a dirty tree, so the tag recorded a
+# commit that did not describe what was uploaded, and the difference was
+# invisible afterwards — a store binary and a tag that merely look like
+# they belong together.
+#
+# Two halves. Refusing a dirty tree makes the claim true at build time;
+# baking the SHA into the binary makes it checkable later, so the tag
+# stops being an assertion about a timestamp and becomes something the
+# artefact itself carries.
+say "Checking git state…"
+command -v git >/dev/null || fail "git not on PATH — cannot record the source commit."
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+    || fail "Not inside a git work tree. A release must be traceable to a commit."
+
+# Untracked files are included deliberately. An untracked .dart under lib/
+# is compiled into the build exactly like a tracked one, so ignoring them
+# would let real code reach users with nothing in the commit to show for it.
+if [[ -n "$(git status --porcelain)" ]]; then
+    git status --short >&2
+    fail "Working tree is dirty. Commit or stash before building a release —
+otherwise the tag would name a commit that is not what was built."
+fi
+
+GIT_COMMIT="$(git rev-parse HEAD)"
+GIT_COMMIT_SHORT="$(git rev-parse --short HEAD)"
+ok "Clean tree at $GIT_COMMIT_SHORT"
+
 # --- 1. Flutter available --------------------------------------------
 say "Checking Flutter is on PATH…"
 command -v flutter >/dev/null || fail "flutter not on PATH."
@@ -182,9 +214,11 @@ ok "tests pass"
 say "Building release AAB with:"
 say "  API base:   $API_BASE"
 say "  Share URL:  $SHARE_URL_BASE"
+say "  Commit:     $GIT_COMMIT_SHORT"
 flutter build appbundle --release \
     --dart-define=NDUZEM_API_BASE="$API_BASE" \
-    --dart-define=NDUZEM_SHARE_URL_BASE="$SHARE_URL_BASE"
+    --dart-define=NDUZEM_SHARE_URL_BASE="$SHARE_URL_BASE" \
+    --dart-define=NDUZEM_GIT_COMMIT="$GIT_COMMIT"
 
 AAB="$CLIENT_ROOT/build/app/outputs/bundle/release/app-release.aab"
 if [[ ! -f "$AAB" ]]; then
@@ -286,6 +320,7 @@ echo
 printf '  Path:         %s\n' "$AAB"
 printf '  Size:         %s\n' "$AAB_SIZE"
 printf '  Version:      %s (build %s)\n' "$VERSION_NAME" "$VERSION_CODE"
+printf '  Commit:       %s\n' "$GIT_COMMIT"
 printf '  API base:     %s\n' "$API_BASE"
 printf '  Share URL:    %s\n' "$SHARE_URL_BASE"
 [[ -n "${CERT_OWNER:-}" ]]  && printf '  Signed by:    %s\n' "$CERT_OWNER"
@@ -299,4 +334,14 @@ echo "     marketing site. Android App Links won't verify otherwise."
 echo "  2. Upload the AAB in Play Console → Testing → Internal"
 echo "     testing → Create new release (or straight to Production"
 echo "     once the store listing + review-credentials are filled)."
-echo "  3. Bump versionCode in pubspec.yaml before the next release."
+echo "  3. AFTER the upload is accepted, tag the exact commit it was"
+echo "     built from:"
+echo ""
+echo "       git tag -a 'v${VERSION_NAME}+${VERSION_CODE}' ${GIT_COMMIT_SHORT} \\"
+echo "           -m 'Play release ${VERSION_CODE} (${GIT_COMMIT_SHORT})'"
+echo "       git push origin 'v${VERSION_NAME}+${VERSION_CODE}'"
+echo ""
+echo "     Convention and rationale: provability/reproducible-build/README.md."
+echo "     Tags are protected and immutable — this is one-way, so tag"
+echo "     after Play accepts the build, never before."
+echo "  4. Bump versionCode in pubspec.yaml before the next release."
