@@ -1,4 +1,4 @@
-# Nduzem — privacy-first file transfer (client)
+# Nduzem - privacy-first file transfer (client)
 
 Nduzem lets a sender transmit a file to a recipient such that **the
 server never holds keys or plaintext**. The operator can see who sent what
@@ -6,9 +6,9 @@ to whom and how big the blob was, but cannot see the file contents,
 filename, or type. All cryptography happens on the user's device.
 
 This repository contains the **client and verification artifacts**:
-- [client/](client/) — Flutter app: **Android and web** shipped, **iOS under
+- [client/](client/): Flutter app: **Android and web** shipped, **iOS under
   construction**. Apache-2.0 licensed.
-- [provability/](provability/) — scaffolding for reproducible builds, audit
+- [provability/](provability/): scaffolding for reproducible builds, audit
   reports and transparency signals. **None of it is operational yet**; see
   [provability/README.md](provability/README.md) for the status of each and
   what closing the gap takes.
@@ -32,7 +32,7 @@ The backend (FastAPI conduit + infrastructure) is **not** open source.
 - "Burn after reading" means the **server** deletes its copy. It does **not**
   delete the recipient's decrypted local copy.
 - Content scanning is structurally impossible in this design. Abuse response
-  is reactive, report-driven, and behavior-based — never server-side content
+  is reactive, report-driven, and behavior-based; never server-side content
   inspection.
 - The client crypto stack is classical (X25519 + Ed25519 + XChaCha20-Poly1305).
   A hybrid post-quantum suite is planned for v2; v1 is migration-ready via
@@ -40,7 +40,7 @@ The backend (FastAPI conduit + infrastructure) is **not** open source.
 - We do describe Nduzem as **zero-knowledge**, and we mean something
   specific and narrow by it: the server never holds your keys or your
   plaintext, and cannot derive either. That is a claim about the
-  architecture, and it is checkable — against the client source in this
+  architecture, and it is checkable, against the client source in this
   repository, and against the protocol in the security whitepaper. You do
   not have to take it on trust, which is the point.
   It is **not** a claim that anyone independent has verified it. No external
@@ -54,7 +54,7 @@ The backend (FastAPI conduit + infrastructure) is **not** open source.
 
 > **The verification toolchain is under construction; the workflow below
 > is the target, not the current state.** `verify.sh` is not implemented
-> and **exits non-zero** — it verifies nothing today, and says so rather
+> and **exits non-zero**: it verifies nothing today, and says so rather
 > than reporting a success it has not earned.
 
 For every released build, this repository publishes a **build manifest**
@@ -71,7 +71,7 @@ the published manifest. Any divergence is reported.
 
 ## License
 
-Client source (this repository): **Apache-2.0** — see
+Client source (this repository): **Apache-2.0**, see
 [LICENSE-client.md](LICENSE-client.md). The Apache patent grant covers
 contributors and downstream users.
 
