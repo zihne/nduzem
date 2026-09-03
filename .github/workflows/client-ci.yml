@@ -11,6 +11,21 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Least privilege for GITHUB_TOKEN. Without this block the workflow
+# inherits the repository default, which for older repositories is
+# read/write across issues, contents, packages and more.
+#
+# This job only checks out and runs tests, so read access to contents is
+# the whole requirement. It matters more once this repository is public:
+# `pull_request` above means forks run this workflow, and a token scoped
+# wider than the job needs is the thing a malicious PR would reach for.
+#
+# Declared at the top level so it applies to every job, including any
+# added later — a job that needs more should widen it for itself rather
+# than the file being loosened for all of them.
+permissions:
+  contents: read
+
 concurrency:
   # A new push to the same ref supersedes the previous run.
   group: client-${{ github.ref }}
