@@ -46,5 +46,52 @@ links.
   release immutability is enabled — so neither the tag nor the artefact
   it describes can be swapped after publication.
 
-There are no tags in this repository yet. The first will be created with
-the first release published after this convention was written.
+## What each tag actually attests
+
+The guarantees are not uniform across the history, and the boundary is
+worth stating plainly rather than leaving a reader to infer it from
+signature badges.
+
+### `v0.1.0+38` — the first production release, weaker than the rest
+
+This tag records the build promoted to Google Play production in
+September 2026. Three caveats apply to it and to no later tag:
+
+- **The tag is unsigned**, and so is the commit it points at
+  (`3aba888`). Both predate commit signing being configured on this
+  repository.
+- **The link between commit and binary is inferred, not embedded.** The
+  AAB carries no commit identifier: `NDUZEM_GIT_COMMIT` was added to
+  `build-release.sh` afterwards. The commit was established by comparing
+  the AAB's build time against the commit log — the merge landed at
+  10:20:44, the AAB was written at 10:24:56, and no commit exists between
+  them. That is good evidence. It is not proof, and it is not something a
+  third party can check independently.
+- **The working tree was not verified clean at build time.** The
+  clean-tree check was also added afterwards, so uncommitted changes
+  cannot be ruled out by anything other than recollection.
+
+It was left in place rather than deleted and recreated once signing
+worked. Signing it would have placed a cryptographic attestation on the
+strongest-looking part of a chain whose weakest link is the inference
+above — and deleting a published tag to improve appearances is precisely
+what the immutability rule exists to prevent. A documented boundary is
+more honest than a tidied one.
+
+### `v0.1.0+39` onward
+
+From the next release, all three gaps are closed by
+`client/scripts/build-release.sh`:
+
+- The tag and its commit are both **signed**, and GitHub reports them
+  verified.
+- The commit SHA is compiled into the binary as `NDUZEM_GIT_COMMIT`, so
+  the link is carried by the artefact rather than inferred from a
+  timestamp.
+- The build **refuses to run on a dirty working tree**, so the commit
+  describes everything that went into it — untracked files included.
+
+None of this yet amounts to a reproducible build. It establishes *which
+source* a release claims to come from; proving that the source produces
+that binary is what the rest of this directory is for, and it is not
+implemented.
