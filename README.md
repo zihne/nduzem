@@ -80,5 +80,20 @@ repository.
 
 ## Status
 
-Pre-launch. There is no public app to install yet. This repository will be
-made public when the client reaches a verifiable beta.
+**Live.** Android is on Google Play, and the web client runs at
+[app.nduzem.com](https://app.nduzem.com). **iOS is the remaining piece**
+and is under construction.
+
+This repository was made public in September 2026, at launch.
+
+An earlier version of this section said it would be published "when the
+client reaches a verifiable beta". That was changed deliberately, and it
+is worth saying so rather than letting the promise disappear: the
+verification toolchain in [provability/](provability/) is still
+scaffolding, `verify.sh` exits non-zero, and waiting for it would have
+meant shipping an app whose central claim nobody could read the source of
+for months.
+
+Readable code now is worth more than verifiable builds later. They are
+not the same thing, and [provability/README.md](provability/README.md)
+sets out exactly which pieces are missing.
