@@ -111,38 +111,33 @@ cd "$CLIENT_ROOT"
 
 # --- 1. Flutter available --------------------------------------------
 say "Checking Flutter is on PATH…"
-command -v flutter >/dev/null || fail "flutter not on PATH."
-# Capture the whole stream before slicing it. `flutter --version | head -1`
-# looks harmless but breaks intermittently: head exits after one line, and
-# when flutter then tries to print its "a new version is available" box the
-# closed pipe raises SIGPIPE, which the Dart tool does not handle — it dies
-# with an unhandled FileSystemException and takes the build with it. The
-# failure only appears when flutter happens to have an upgrade notice, so it
-# looks random and unrelated to whatever else changed.
-_flutter_version="$(flutter --version 2>/dev/null)"
-printf '%s\n' "${_flutter_version%%$'\n'*}"
+# Resolves the pinned SDK into "${FLUTTER[@]}" and refuses any other
+# version. See scripts/lib/flutter-sdk.sh for why a bare `flutter` is
+# not good enough for a release build.
+# shellcheck source=scripts/lib/flutter-sdk.sh
+source "$SCRIPT_DIR/lib/flutter-sdk.sh"
 ok "Flutter ready"
 
 # --- 2. Clean --------------------------------------------------------
 say "flutter clean…"
-flutter clean >/dev/null
+"${FLUTTER[@]}" clean >/dev/null
 ok "clean done"
 
 # --- 3. Deps ---------------------------------------------------------
 say "flutter pub get…"
-flutter pub get >/dev/null
+"${FLUTTER[@]}" pub get >/dev/null
 ok "deps resolved"
 
 # --- 4. Analyze ------------------------------------------------------
 say "flutter analyze…"
-if ! flutter analyze; then
+if ! "${FLUTTER[@]}" analyze; then
     fail "analyze failed. Fix the reported issues before releasing."
 fi
 ok "analyze clean"
 
 # --- 5. Tests --------------------------------------------------------
 say "flutter test (full suite)…"
-if ! flutter test; then
+if ! "${FLUTTER[@]}" test; then
     fail "tests failed. Fix before releasing."
 fi
 ok "tests pass"
@@ -169,7 +164,7 @@ say "  Share URL:  $SHARE_URL_BASE"
 # vhost) has no CDN origin in `script-src`/`connect-src`, so dropping
 # this flag does not quietly reintroduce the dependency — it breaks the
 # app at load time, visibly, on the next deploy.
-flutter build web --release \
+"${FLUTTER[@]}" build web --release \
     --no-web-resources-cdn \
     --dart-define=NDUZEM_API_BASE="$API_BASE" \
     --dart-define=NDUZEM_SHARE_URL_BASE="$SHARE_URL_BASE"

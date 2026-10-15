@@ -152,24 +152,19 @@ cd "$CLIENT_ROOT"
 # --- 1. Host + toolchain ---------------------------------------------
 say "Checking host and toolchain…"
 [[ "$(uname -s)" == "Darwin" ]] || fail "iOS builds require macOS. This is $(uname -s)."
-command -v flutter >/dev/null || fail "flutter not on PATH."
 command -v xcodebuild >/dev/null || fail "xcodebuild not on PATH. Install Xcode from the App Store."
 command -v pod >/dev/null || fail "CocoaPods not on PATH.
 flutter_secure_storage does not support Swift Package Manager, so
 CocoaPods is still required. Install with: sudo gem install cocoapods"
+# Resolves the pinned SDK into "${FLUTTER[@]}" and refuses any other
+# version. See scripts/lib/flutter-sdk.sh for why a bare `flutter` is
+# not good enough for a release build.
+# shellcheck source=scripts/lib/flutter-sdk.sh
+source "$SCRIPT_DIR/lib/flutter-sdk.sh"
 # `|| true` is load-bearing under `set -o pipefail`. xcodebuild keeps
 # writing after `head -1` exits, takes SIGPIPE, and pipefail turns that
 # into a 141 that `set -e` acts on — the script would exit here, having
 # printed the version and nothing else, with no error message at all.
-# Capture the whole stream before slicing it. `flutter --version | head -1`
-# looks harmless but breaks intermittently: head exits after one line, and
-# when flutter then tries to print its "a new version is available" box the
-# closed pipe raises SIGPIPE, which the Dart tool does not handle — it dies
-# with an unhandled FileSystemException and takes the build with it. The
-# failure only appears when flutter happens to have an upgrade notice, so it
-# looks random and unrelated to whatever else changed.
-_flutter_version="$(flutter --version 2>/dev/null)"
-printf '%s\n' "${_flutter_version%%$'\n'*}"
 xcodebuild -version 2>/dev/null | head -1 || true
 ok "toolchain ready"
 
@@ -347,24 +342,24 @@ App Store Connect will reject this build. Bump the +N in pubspec.yaml first."
 
 # --- 6. Clean --------------------------------------------------------
 say "flutter clean…"
-flutter clean >/dev/null
+"${FLUTTER[@]}" clean >/dev/null
 ok "clean done"
 
 # --- 7. Deps ---------------------------------------------------------
 say "flutter pub get…"
-flutter pub get >/dev/null
+"${FLUTTER[@]}" pub get >/dev/null
 ok "deps resolved"
 
 # --- 8. Analyze ------------------------------------------------------
 say "flutter analyze…"
-if ! flutter analyze; then
+if ! "${FLUTTER[@]}" analyze; then
     fail "analyze failed. Fix the reported issues before releasing."
 fi
 ok "analyze clean"
 
 # --- 9. Tests --------------------------------------------------------
 say "flutter test (full suite)…"
-if ! flutter test; then
+if ! "${FLUTTER[@]}" test; then
     fail "tests failed. Fix before releasing."
 fi
 ok "tests pass"
@@ -387,7 +382,7 @@ else
     BUILD_ARGS+=(--export-method "$EXPORT_METHOD")
 fi
 
-flutter build ipa "${BUILD_ARGS[@]}"
+"${FLUTTER[@]}" build ipa "${BUILD_ARGS[@]}"
 
 IPA=$(find "$CLIENT_ROOT/build/ios/ipa" -maxdepth 1 -name '*.ipa' -print -quit 2>/dev/null || true)
 [[ -n "$IPA" && -f "$IPA" ]] || fail "build produced no IPA under build/ios/ipa/"
