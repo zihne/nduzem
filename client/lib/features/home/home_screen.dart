@@ -411,8 +411,9 @@ class _FingerprintCard extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               const Text(
-                'Share this out-of-band with the people you transfer with. '
-                'If it changes, someone may be intercepting your keys.',
+                'Read these digits out to the people you send files to — '
+                'over the phone or in person, not by email. If your digits '
+                'ever change and you did not change them, stop and ask us.',
                 style: TextStyle(fontStyle: FontStyle.italic),
               ),
               const SizedBox(height: 12),
