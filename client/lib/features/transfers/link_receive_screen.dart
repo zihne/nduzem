@@ -533,8 +533,8 @@ class _LinkReceiveScreenState extends ConsumerState<LinkReceiveScreen> {
           obscureText: true,
           decoration: InputDecoration(
             labelText: 'Link password',
-            helperText: 'The sender shared this password out-of-band '
-                '(not in the link itself).',
+            helperText: 'The person who sent the link should have given '
+                'you this password separately.',
             errorText: _passwordRejected ? 'Password incorrect.' : null,
           ),
         ),

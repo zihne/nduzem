@@ -747,8 +747,10 @@ class _SendScreenState extends ConsumerState<SendScreen> {
               ),
               const SizedBox(height: 4),
               Text(
-                'Share this password with the recipient out-of-band. '
-                'It gates the download but does not encrypt the file.',
+                'Send this password separately from the link — by text '
+                'message or over the phone, not in the same email. It '
+                'controls who can download, but it is not what encrypts '
+                'the file.',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
               const SizedBox(height: 20),
@@ -964,8 +966,9 @@ class _LinkCreatedDialog extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(
-              'Anyone with this link can decrypt the file. Share it '
-              "out-of-band; don't post it publicly.",
+              'Anyone who has this link can open the file. Send it '
+              'straight to the person you mean to — never post it '
+              'anywhere public.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ],
@@ -1122,9 +1125,10 @@ class _FingerprintBanner extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
       ),
       child: Text(
-        "You haven't verified this contact yet. For stronger safety, ask "
-        'them to read their fingerprint to you out-of-band before you '
-        'send anything sensitive. Otherwise send at your own risk.',
+        "You haven't checked who this is yet. Before you send anything "
+        'sensitive, phone them or ask them in person to read out their '
+        'digits, and make sure they match. Sending without checking is '
+        'up to you.',
         style: TextStyle(color: scheme.onSurfaceVariant),
       ),
     );
