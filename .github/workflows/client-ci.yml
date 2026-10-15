@@ -48,11 +48,33 @@ jobs:
       - name: Install libsodium
         run: sudo apt-get update && sudo apt-get install -y libsodium23
 
+      # Guard before setup, so a mismatch fails in two seconds with a
+      # clear message rather than after a full SDK download. The comment
+      # below used to claim "matches the local toolchain" and was simply
+      # false once a developer switched their shared ~/flutter for
+      # another project — nothing checked it. `client/.fvmrc` is now the
+      # single pin and this step is what keeps that true.
+      - name: Flutter version matches client/.fvmrc
+        run: |
+          # Paths here are relative to client/ — the job sets
+          # defaults.run.working-directory, so 'client/.fvmrc' would
+          # resolve to client/client/.fvmrc. Messages below still name
+          # the repo-relative path, which is what a reader needs.
+          pinned=$(python3 -c "import json;print(json.load(open('.fvmrc'))['flutter'])")
+          if [ "$pinned" != "$FLUTTER_VERSION" ]; then
+            echo "client/.fvmrc says '$pinned' but this workflow pins '$FLUTTER_VERSION'." >&2
+            echo "Change .fvmrc and FLUTTER_VERSION together." >&2
+            exit 1
+          fi
+          echo "pinned Flutter: $pinned"
+        env:
+          FLUTTER_VERSION: '3.47.0-0.2.pre'
+
       - uses: subosito/flutter-action@v2
         with:
-          # Matches the local toolchain. Pinned rather than `stable`
-          # so a Flutter release cannot turn a green branch red without
-          # a commit that says so.
+          # Keep in step with client/.fvmrc — the guard above enforces it.
+          # Pinned rather than `stable` so a Flutter release cannot turn a
+          # green branch red without a commit that says so.
           flutter-version: '3.47.0-0.2.pre'
           channel: beta
           cache: true
