@@ -150,16 +150,11 @@ ok "Clean tree at $GIT_COMMIT_SHORT"
 
 # --- 1. Flutter available --------------------------------------------
 say "Checking Flutter is on PATH…"
-command -v flutter >/dev/null || fail "flutter not on PATH."
-# Capture the whole stream before slicing it. `flutter --version | head -1`
-# looks harmless but breaks intermittently: head exits after one line, and
-# when flutter then tries to print its "a new version is available" box the
-# closed pipe raises SIGPIPE, which the Dart tool does not handle — it dies
-# with an unhandled FileSystemException and takes the build with it. The
-# failure only appears when flutter happens to have an upgrade notice, so it
-# looks random and unrelated to whatever else changed.
-_flutter_version="$(flutter --version 2>/dev/null)"
-printf '%s\n' "${_flutter_version%%$'\n'*}"
+# Resolves the pinned SDK into "${FLUTTER[@]}" and refuses any other
+# version. See scripts/lib/flutter-sdk.sh for why a bare `flutter` is
+# not good enough for a release build.
+# shellcheck source=scripts/lib/flutter-sdk.sh
+source "$SCRIPT_DIR/lib/flutter-sdk.sh"
 ok "Flutter ready"
 
 # --- 2. Release signing config exists --------------------------------
@@ -188,24 +183,24 @@ ok "key.properties + keystore present"
 
 # --- 3. Clean --------------------------------------------------------
 say "flutter clean…"
-flutter clean >/dev/null
+"${FLUTTER[@]}" clean >/dev/null
 ok "clean done"
 
 # --- 4. Deps ---------------------------------------------------------
 say "flutter pub get…"
-flutter pub get >/dev/null
+"${FLUTTER[@]}" pub get >/dev/null
 ok "deps resolved"
 
 # --- 5. Analyze ------------------------------------------------------
 say "flutter analyze…"
-if ! flutter analyze; then
+if ! "${FLUTTER[@]}" analyze; then
     fail "analyze failed. Fix the reported issues before releasing."
 fi
 ok "analyze clean"
 
 # --- 6. Tests --------------------------------------------------------
 say "flutter test (full suite)…"
-if ! flutter test; then
+if ! "${FLUTTER[@]}" test; then
     fail "tests failed. Fix before releasing."
 fi
 ok "tests pass"
@@ -215,7 +210,7 @@ say "Building release AAB with:"
 say "  API base:   $API_BASE"
 say "  Share URL:  $SHARE_URL_BASE"
 say "  Commit:     $GIT_COMMIT_SHORT"
-flutter build appbundle --release \
+"${FLUTTER[@]}" build appbundle --release \
     --dart-define=NDUZEM_API_BASE="$API_BASE" \
     --dart-define=NDUZEM_SHARE_URL_BASE="$SHARE_URL_BASE" \
     --dart-define=NDUZEM_GIT_COMMIT="$GIT_COMMIT"
