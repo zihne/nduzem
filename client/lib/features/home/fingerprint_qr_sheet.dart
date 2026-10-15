@@ -64,10 +64,10 @@ class FingerprintQrSheet extends StatelessWidget {
             ),
             const SizedBox(height: 16),
             const Text(
-              'Ask the other person to scan this from their device, or '
-              'to read the digits back to you over an out-of-band '
-              'channel (voice call, in person). If both sides see the '
-              'same digits, the keys are the ones you exchanged.',
+              'Ask the other person to scan this from their device. Or '
+              'phone them, or ask them in person, and read the digits to '
+              'each other. If you both see the same digits, you are '
+              'connected to the right person.',
               style: TextStyle(fontStyle: FontStyle.italic),
             ),
             const SizedBox(height: 16),
