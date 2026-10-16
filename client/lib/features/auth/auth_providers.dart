@@ -4,6 +4,7 @@ import 'package:sodium_libs/sodium_libs.dart';
 import '../../api/api_client.dart';
 import '../../api/auth_api.dart';
 import '../../api/billing_api.dart';
+import '../../api/drops_api.dart';
 import '../../api/links_api.dart';
 import '../../api/transfers_api.dart';
 import '../../api/users_api.dart';
@@ -54,12 +55,14 @@ class _AuthWiring {
     required this.linksApi,
     required this.billingApi,
     required this.repository,
+    required this.dropsApi,
   });
   final AuthApi authApi;
   final UsersApi usersApi;
   final TransfersApi transfersApi;
   final LinksApi linksApi;
   final BillingApi billingApi;
+  final DropsApi dropsApi;
   final AuthRepository repository;
 }
 
@@ -79,6 +82,7 @@ final _authWiringProvider = FutureProvider<_AuthWiring>((ref) async {
   final transfersApi = TransfersApi(client);
   final linksApi = LinksApi(client);
   final billingApi = BillingApi(client);
+  final dropsApi = DropsApi(client);
   repo = AuthRepository(
     api: authApi,
     usersApi: usersApi,
@@ -93,6 +97,7 @@ final _authWiringProvider = FutureProvider<_AuthWiring>((ref) async {
     transfersApi: transfersApi,
     linksApi: linksApi,
     billingApi: billingApi,
+    dropsApi: dropsApi,
     repository: repo,
   );
 });
@@ -100,6 +105,11 @@ final _authWiringProvider = FutureProvider<_AuthWiring>((ref) async {
 final authRepositoryProvider = FutureProvider<AuthRepository>((ref) async {
   final wiring = await ref.watch(_authWiringProvider.future);
   return wiring.repository;
+});
+
+final dropsApiProvider = FutureProvider<DropsApi>((ref) async {
+  final wiring = await ref.watch(_authWiringProvider.future);
+  return wiring.dropsApi;
 });
 
 final usersApiProvider = FutureProvider<UsersApi>((ref) async {

@@ -105,6 +105,14 @@ class SettingsScreen extends ConsumerWidget {
               onTap: () => context.push('/key-backup'),
             ),
             ListTile(
+              leading: const Icon(Icons.upload_file_outlined),
+              title: const Text('Upload links'),
+              subtitle: const Text(
+                'Let someone send you a file without creating an account.',
+              ),
+              onTap: () => context.push('/drops'),
+            ),
+            ListTile(
               leading: const Icon(Icons.restore),
               title: const Text('Restore from recovery key'),
               subtitle: const Text(
