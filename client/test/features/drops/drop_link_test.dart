@@ -6,7 +6,7 @@ import 'package:nduzem/features/drops/drop_link.dart';
 void main() {
   const pub = 'jud4aI0FPjlg4ehcRMdjQLQwQwsf2YrCVSLSIFoSHFA=';
 
-  test('key rides in the fragment, never the path or query', () {
+  test('route and key both live inside the fragment', () {
     final url = buildDropUploadUrl(
       shareUrlBase: Uri.parse('https://nduzem.com'),
       dropId: 'abc-123',
@@ -14,15 +14,20 @@ void main() {
     );
     final parsed = Uri.parse(url);
 
-    expect(parsed.path, '/drop/abc-123');
+    // The HTTP request is for the origin only. Everything the client
+    // needs is after the '#', which go_router reads as the route
+    // (default hash strategy — the app sets no path URL strategy).
+    // '/' — the server sees `GET /` and learns nothing else.
+    expect(parsed.path, '/');
     expect(parsed.query, isEmpty);
-    expect(parsed.fragment, startsWith('k='));
+    expect(parsed.fragment, '/drop/abc-123?k=${pub.replaceAll('=', '')}');
 
     // The whole point: the key must not appear anywhere the browser
     // would transmit. A regression here silently breaks the security
     // property while the link still works.
     final beforeFragment = url.split('#').first;
     expect(beforeFragment, isNot(contains('jud4')));
+    expect(beforeFragment, 'https://nduzem.com/');
   });
 
   test('base64url-encodes without padding, matching link mode', () {
@@ -31,7 +36,7 @@ void main() {
       dropId: 'd',
       identityPubB64: 'ab+cd/ef==',
     );
-    expect(url.split('#k=').last, 'ab-cd_ef');
+    expect(url.split('?k=').last, 'ab-cd_ef');
   });
 
   test('normalises a base with or without a trailing slash', () {
@@ -41,8 +46,8 @@ void main() {
         dropId: 'x',
         identityPubB64: pub,
       );
-      expect(Uri.parse(url).path, '/drop/x', reason: base);
-      expect(url, isNot(contains('//drop')));
+      expect(Uri.parse(url).fragment, startsWith('/drop/x?k='), reason: base);
+      expect(url, isNot(contains('//#')));
     }
   });
 
@@ -67,7 +72,7 @@ void main() {
     );
   });
 
-  group('parseDropFragmentKey', () {
+  group('decodeOwnerKeyParam', () {
     test('round-trips with the builder', () {
       // The property that matters: whatever the owner's client puts in
       // a link, the uploader's page recovers byte for byte. A parser
@@ -77,13 +82,16 @@ void main() {
         dropId: 'd-1',
         identityPubB64: pub,
       );
-      final recovered = parseDropFragmentKey(Uri.parse(url).fragment);
+      // Parse the in-fragment route the way go_router does, then take
+      // its `k` parameter — exactly the path the router follows.
+      final route = Uri.parse(Uri.parse(url).fragment);
+      final recovered = decodeOwnerKeyParam(route.queryParameters['k']);
       expect(recovered, isNotNull);
       expect(recovered, equals(base64Decode(pub)));
     });
 
     test('handles base64url without padding', () {
-      final recovered = parseDropFragmentKey('k=ab-cd_ef');
+      final recovered = decodeOwnerKeyParam('ab-cd_ef');
       expect(recovered, equals(base64Decode('ab+cd/ef')));
     });
 
@@ -94,11 +102,11 @@ void main() {
       final stripped = key.replaceAll('+', '-').replaceAll('/', '_')
           .replaceAll('=', '');
       expect(stripped.length % 4, isNot(0), reason: 'needs padding back');
-      expect(parseDropFragmentKey('k=$stripped'), hasLength(32));
+      expect(decodeOwnerKeyParam(stripped), hasLength(32));
     });
 
-    test('tolerates other fragment params around it', () {
-      final recovered = parseDropFragmentKey('x=1&k=ab-cd_ef&y=2');
+    test('decodes a value taken from the route query', () {
+      final recovered = decodeOwnerKeyParam('ab-cd_ef');
       expect(recovered, equals(base64Decode('ab+cd/ef')));
     });
 
@@ -107,14 +115,12 @@ void main() {
       // link loses everything after the `#`. Null makes the page say
       // the link is incomplete; a guess would encrypt a document to
       // nothing and report success.
-      for (final bad in <String>[
+      for (final bad in <String?>[
+        null,
         '',
-        'k=',
-        'nothing-here',
-        'kk=abcd',
-        'k=!!!not base64!!!',
+        '!!!not base64!!!',
       ]) {
-        expect(parseDropFragmentKey(bad), isNull, reason: bad);
+        expect(decodeOwnerKeyParam(bad), isNull, reason: '$bad');
       }
     });
   });

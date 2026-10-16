@@ -96,15 +96,19 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/drops',
         builder: (_, __) => const DropsScreen(),
       ),
-      // The uploader's page (ADR-0040 phase 4b). `#k=<owner identity
-      // pub>` rides in the fragment, which the browser never sends to
-      // the server — that is what stops a compromised server
-      // substituting its own key and reading the upload.
+      // The uploader's page (ADR-0040 phase 4b).
+      //
+      // The owner's identity key arrives as the `k` parameter of THIS
+      // route, and the whole route lives in the URL fragment because
+      // the web app uses go_router's default hash strategy. Browsers
+      // transmit nothing after `#`, so `k` never reaches the server —
+      // which is what stops a compromised server substituting its own
+      // key and reading every upload. See `drop_link.dart`.
       GoRoute(
         path: '/drop/:dropId',
         builder: (context, state) => DropUploadScreen(
           dropId: state.pathParameters['dropId'] ?? '',
-          fragment: state.uri.fragment,
+          ownerKeyParam: state.uri.queryParameters['k'],
         ),
       ),
       GoRoute(

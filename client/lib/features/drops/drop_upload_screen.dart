@@ -29,14 +29,15 @@ class DropUploadScreen extends ConsumerStatefulWidget {
   const DropUploadScreen({
     super.key,
     required this.dropId,
-    required this.fragment,
+    required this.ownerKeyParam,
   });
 
   final String dropId;
 
-  /// Raw URL fragment, e.g. `k=<base64url owner identity pub>`. Never
-  /// transmitted to the server by the browser.
-  final String fragment;
+  /// The `k` parameter of the client-side route — the owner's X25519
+  /// public key, base64url. It lives inside the URL fragment, which
+  /// browsers never transmit, so the server never sees it.
+  final String? ownerKeyParam;
 
   @override
   ConsumerState<DropUploadScreen> createState() => _DropUploadScreenState();
@@ -58,11 +59,22 @@ class _DropUploadScreenState extends ConsumerState<DropUploadScreen> {
   @override
   void initState() {
     super.initState();
+    // The Send button's enabled state is derived from `_password.text`,
+    // and a TextEditingController rebuilds nothing on its own. Without
+    // this, typing the password AFTER choosing the file left Send
+    // disabled — choosing a file happens to call setState, so the other
+    // order worked, which is what made it look intermittent.
+    _password.addListener(_onPasswordChanged);
     _loadInfo();
+  }
+
+  void _onPasswordChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
+    _password.removeListener(_onPasswordChanged);
     _password.dispose();
     super.dispose();
   }
@@ -72,7 +84,7 @@ class _DropUploadScreenState extends ConsumerState<DropUploadScreen> {
   /// Parsing lives in `drop_link.dart` beside the builder that produced
   /// the link, so the two cannot drift, and so it can be tested without
   /// a widget.
-  Uint8List? get _ownerKey => parseDropFragmentKey(widget.fragment);
+  Uint8List? get _ownerKey => decodeOwnerKeyParam(widget.ownerKeyParam);
 
   Future<void> _loadInfo() async {
     try {
@@ -97,6 +109,10 @@ class _DropUploadScreenState extends ConsumerState<DropUploadScreen> {
       _error = null;
     });
   }
+
+  /// Both halves present. Named rather than inlined so the button and
+  /// the hint beneath it cannot drift apart.
+  bool get _canSend => _file != null && _password.text.trim().isNotEmpty;
 
   Future<void> _send() async {
     final file = _file;
@@ -255,13 +271,23 @@ class _DropUploadScreenState extends ConsumerState<DropUploadScreen> {
               },
               style: text.bodySmall,
             ),
-          ] else
+          ] else ...[
             FilledButton(
-              onPressed: (_file == null || _password.text.trim().isEmpty)
-                  ? null
-                  : _send,
+              onPressed: _canSend ? _send : null,
               child: const Text('Send'),
             ),
+            // A dead button with no explanation reads as a broken page.
+            // Say which of the two things is still missing.
+            if (!_canSend) ...[
+              const SizedBox(height: 8),
+              Text(
+                _file == null
+                    ? 'Choose a file to send.'
+                    : 'Enter the password you were sent.',
+                style: text.bodySmall,
+              ),
+            ],
+          ],
           if (_error != null) ...[
             const SizedBox(height: 16),
             Text(

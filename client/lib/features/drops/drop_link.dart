@@ -22,12 +22,33 @@
 /// does not learn it even incidentally. Same property link mode relies
 /// on for `K_file`, and the same one `privacy.html` and the whitepaper
 /// mean by "a fragment we never see".
+///
+/// WHY THE KEY IS A QUERY PARAMETER *INSIDE* THE FRAGMENT. The web app
+/// has no `usePathUrlStrategy()`, so Flutter web uses the default hash
+/// strategy and go_router takes the route itself from the fragment. A
+/// link of the form `/drop/<id>#k=...` therefore asks go_router to
+/// treat `k=...` as the route and it fails an assertion before the
+/// screen is ever built.
+///
+/// So the route and the key share the fragment:
+///
+///     https://app.nduzem.com/#/drop/<id>?k=<owner identity pub>
+///
+/// The security property is unchanged, and this is the part worth being
+/// sure about: browsers transmit nothing after `#`, so a `?k=` sitting
+/// inside the fragment is as invisible to the server as a bare
+/// fragment was. It is a query parameter of the client-side route, not
+/// of the HTTP request — the server sees `GET /`.
+///
+/// Link mode does not hit this because its web decrypt page is a static
+/// page in `infra/www` that reads `location.hash` itself, rather than a
+/// go_router route.
 library;
 
 import 'dart:convert';
 import 'dart:typed_data';
 
-/// Build `https://<host>/drop/<id>#k=<identity_pub>`.
+/// Build `https://<host>/#/drop/<id>?k=<identity_pub>`.
 ///
 /// [identityPubB64] must be the owner's own X25519 public key, read from
 /// this device. [shareUrlBase] is the bare host, not the `api.`
@@ -56,32 +77,30 @@ String buildDropUploadUrl({
       .replaceAll('/', '_')
       .replaceAll('=', '');
 
-  // shareUrlBase may or may not end in `/` — normalise before appending.
-  final base = shareUrlBase.replace(
-    path: shareUrlBase.path.endsWith('/')
-        ? '${shareUrlBase.path}drop/$dropId'
-        : '${shareUrlBase.path}/drop/$dropId',
-  );
-  return '$base#k=$k';
+  // Everything after `#` is the client-side route plus its parameters.
+  // The host part keeps any path the deployment is served under.
+  final trimmed = shareUrlBase.path.endsWith('/')
+      ? shareUrlBase.path.substring(0, shareUrlBase.path.length - 1)
+      : shareUrlBase.path;
+  final origin = shareUrlBase.replace(path: trimmed).toString();
+  return '$origin/#/drop/$dropId?k=$k';
 }
 
 
-/// Recover the owner's X25519 public key from a drop link's fragment.
+/// Recover the owner's X25519 public key from the `k` parameter of a
+/// drop link.
 ///
 /// The inverse of [buildDropUploadUrl], kept beside it so the two
 /// cannot drift — a parser that silently disagrees with the builder
 /// produces uploads nobody can open.
 ///
-/// Returns **null** rather than throwing or guessing when the fragment
-/// is absent or malformed. That happens for real: some mail clients and
+/// Returns **null** rather than throwing or guessing when the value is
+/// absent or malformed. That happens for real: some mail clients and
 /// chat apps strip URL fragments, and a hand-retyped link loses
 /// everything after the `#`. The uploader page must say the link is
 /// incomplete, because the alternative is encrypting a document to
 /// nothing and reporting success.
-Uint8List? parseDropFragmentKey(String fragment) {
-  if (fragment.isEmpty) return null;
-  final match = RegExp(r'(?:^|&)k=([^&]+)').firstMatch(fragment);
-  final value = match?.group(1);
+Uint8List? decodeOwnerKeyParam(String? value) {
   if (value == null || value.isEmpty) return null;
   try {
     var b64 = value.replaceAll('-', '+').replaceAll('_', '/');
