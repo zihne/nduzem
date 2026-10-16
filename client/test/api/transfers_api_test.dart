@@ -312,6 +312,40 @@ void main() {
       expect(items.single.transferId, 't-a');
       expect(items.single.senderHandle, 'alice');
       expect(items.single.byteCount, 128);
+      // App-mode items carry no drop fields. If these ever came back
+      // non-null for an ordinary transfer, every inbox tile would start
+      // claiming it arrived through an upload link.
+      expect(items.single.dropId, isNull);
+      expect(items.single.dropLabel, isNull);
+    });
+
+    test('a drop arrival carries the link that produced it', () async {
+      when(() => client.get(any(), authed: any(named: 'authed'))).thenAnswer(
+        (_) async => <String, dynamic>{
+          'raw': [
+            {
+              'transfer_id': 't-b',
+              // No sender, by construction — the uploader has no
+              // account. The link's name is the only context there is.
+              'sender_id': null,
+              'sender_handle': null,
+              'drop_id': 'd-1',
+              'drop_label': 'Smith matter',
+              'enc_header': 'EH',
+              'crypto_suite': 1,
+              'byte_count': 2048,
+              'created_at': '2026-10-16T12:00:00Z',
+              'expires_at': '2026-10-23T12:00:00Z',
+            },
+          ],
+        },
+      );
+
+      final item = (await api.inbox()).single;
+      expect(item.senderId, isNull);
+      expect(item.senderHandle, isNull);
+      expect(item.dropId, 'd-1');
+      expect(item.dropLabel, 'Smith matter');
     });
   });
 

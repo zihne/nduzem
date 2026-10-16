@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../api/drops_api.dart';
 import '../../storage/secure_storage.dart';
@@ -213,6 +214,7 @@ class _DropTile extends StatelessWidget {
       subtitle: Text(
         '$_stateLabel · ${drop.uploadsUsed} of ${drop.maxUploads} used',
       ),
+      onTap: () => context.push('/drops/${drop.dropId}'),
       trailing: drop.isOpen
           ? IconButton(
               tooltip: 'Close this link',
