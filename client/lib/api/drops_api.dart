@@ -64,6 +64,26 @@ class DropsApi {
         .toList(growable: false);
   }
 
+  /// `GET /v1/drops/{id}/uploads` — what arrived through one link.
+  ///
+  /// Includes items that have expired or already been collected:
+  /// "did anything come in, and did I miss it?" is the question this
+  /// answers, and hiding them answers it wrongly.
+  Future<DropArrivals> arrivals(String dropId) async {
+    final body = await _client.get('/v1/drops/$dropId/uploads', authed: true);
+    return DropArrivals(
+      dropId: body['drop_id'] as String,
+      label: body['label'] as String,
+      uploadsUsed: (body['uploads_used'] as num).toInt(),
+      maxUploads: (body['max_uploads'] as num).toInt(),
+      state: _parseState(body['state'] as String?),
+      items: (body['items'] as List<dynamic>? ?? const [])
+          .cast<Map<String, dynamic>>()
+          .map(DropArrival.fromJson)
+          .toList(growable: false),
+    );
+  }
+
   /// `DELETE /v1/drops/{id}` — close it to further uploads. Idempotent,
   /// and it keeps the original revocation timestamp: the moment a drop
   /// stopped accepting uploads is a fact about it, not about the last
@@ -150,4 +170,67 @@ class DropSummary {
   final DateTime createdAt;
 
   bool get isOpen => state == DropState.open;
+}
+
+
+class DropArrivals {
+  const DropArrivals({
+    required this.dropId,
+    required this.label,
+    required this.uploadsUsed,
+    required this.maxUploads,
+    required this.state,
+    required this.items,
+  });
+
+  final String dropId;
+  final String label;
+  final int uploadsUsed;
+  final int maxUploads;
+  final DropState state;
+  final List<DropArrival> items;
+}
+
+/// One file that came in through a link.
+///
+/// [expiresAt] is not optional, and the UI must show it. This view is
+/// the closest thing the product has to a folder, and a folder implies
+/// its contents will still be there later — these are ordinary
+/// transfers that expire and burn on collection.
+class DropArrival {
+  const DropArrival({
+    required this.transferId,
+    required this.encHeaderB64,
+    required this.cryptoSuite,
+    required this.byteCount,
+    required this.status,
+    required this.createdAt,
+    required this.expiresAt,
+  });
+
+  factory DropArrival.fromJson(Map<String, dynamic> json) => DropArrival(
+        transferId: json['transfer_id'] as String,
+        encHeaderB64: json['enc_header'] as String,
+        cryptoSuite: (json['crypto_suite'] as num).toInt(),
+        byteCount: (json['byte_count'] as num).toInt(),
+        status: json['status'] as String,
+        createdAt: DateTime.parse(json['created_at'] as String),
+        expiresAt: DateTime.parse(json['expires_at'] as String),
+      );
+
+  final String transferId;
+
+  /// The filename lives in here, encrypted. The server cannot read it
+  /// and neither can this class — the screen decrypts it locally.
+  final String encHeaderB64;
+  final int cryptoSuite;
+  final int byteCount;
+
+  /// `uploaded` = waiting to be collected, `delivered` = already taken.
+  /// Anything else has expired or been removed.
+  final String status;
+  final DateTime createdAt;
+  final DateTime expiresAt;
+
+  bool get collectable => status == 'uploaded';
 }

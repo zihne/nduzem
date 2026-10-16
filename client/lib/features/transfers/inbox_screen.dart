@@ -139,13 +139,16 @@ class _InboxTile extends StatelessWidget {
               const SizedBox(width: 4),
               Expanded(
                 child: Text(
-                  senderVerified
-                      ? 'Verified sender'
-                      : 'Unknown sender — verify their fingerprint '
-                          'before trusting the file',
+                  _senderCaveat(item, senderVerified),
                   style: TextStyle(
                     fontSize: 12,
-                    color: senderVerified ? scheme.primary : scheme.error,
+                    // A drop upload is neither verified nor suspicious:
+                    // it is unattributable. Colouring it as an error
+                    // would read as a warning about THIS file rather
+                    // than a statement about the mode.
+                    color: item.dropId != null
+                        ? scheme.onSurfaceVariant
+                        : (senderVerified ? scheme.primary : scheme.error),
                     fontStyle: FontStyle.italic,
                   ),
                 ),
@@ -172,7 +175,30 @@ class _InboxTile extends StatelessWidget {
       final short = id.length > 8 ? id.substring(0, 8) : id;
       return 'Sender $short…';
     }
+    // A drop upload is not an anonymous sender — it is a file that came
+    // through a link the recipient created. "Anonymous sender" was the
+    // LINK-mode label and reads as "someone whose name we could not
+    // resolve", which invites the wrong conclusion: that there is an
+    // identity here we simply failed to show.
+    final label = item.dropLabel;
+    if (label != null && label.isNotEmpty) {
+      return 'Upload link: $label';
+    }
+    if (item.dropId != null) return 'Your upload link';
     return 'Anonymous sender';
+  }
+
+  /// The warning line under the sender. For a drop upload the honest
+  /// statement is not "verify their fingerprint" — there is no identity
+  /// to verify, ever, and telling someone to go and check one sends
+  /// them looking for something that does not exist.
+  static String _senderCaveat(InboxItem item, bool senderVerified) {
+    if (item.dropId != null) {
+      return "Sent using your upload link — we can't confirm who sent it";
+    }
+    return senderVerified
+        ? 'Verified sender'
+        : 'Unknown sender — verify their fingerprint before trusting the file';
   }
 
   static String _bytes(int n) {

@@ -19,6 +19,7 @@ import 'features/history/transfer_history_screen.dart';
 import 'features/home/home_screen.dart';
 import 'features/transfers/batch_send_screen.dart';
 import 'features/settings/delete_account_screen.dart';
+import 'features/drops/drop_arrivals_screen.dart';
 import 'features/drops/drop_upload_screen.dart';
 import 'features/drops/drops_screen.dart';
 import 'features/settings/settings_screen.dart';
@@ -95,6 +96,13 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/drops',
         builder: (_, __) => const DropsScreen(),
+      ),
+      // What arrived through one upload link (ADR-0040 phase 4c).
+      GoRoute(
+        path: '/drops/:dropId',
+        builder: (context, state) => DropArrivalsScreen(
+          dropId: state.pathParameters['dropId'] ?? '',
+        ),
       ),
       // The uploader's page (ADR-0040 phase 4b).
       //

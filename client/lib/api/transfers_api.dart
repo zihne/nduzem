@@ -307,11 +307,20 @@ class InboxItem {
     required this.byteCount,
     required this.createdAt,
     required this.expiresAt,
+    this.dropId,
+    this.dropLabel,
   });
 
   final String transferId;
   final String? senderId;
   final String? senderHandle;
+
+  /// Drop mode (ADR-0040). Both null for app- and link-mode transfers.
+  /// When set, the link's name is the only context the file has — and
+  /// the context the recipient actually wants, since they created the
+  /// link for a purpose.
+  final String? dropId;
+  final String? dropLabel;
   final String encHeaderB64;
   final int cryptoSuite;
   final int byteCount;
@@ -327,6 +336,8 @@ class InboxItem {
         byteCount: (m['byte_count'] as num).toInt(),
         createdAt: DateTime.parse(m['created_at'] as String),
         expiresAt: DateTime.parse(m['expires_at'] as String),
+        dropId: m['drop_id'] as String?,
+        dropLabel: m['drop_label'] as String?,
       );
 }
 

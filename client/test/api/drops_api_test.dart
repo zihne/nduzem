@@ -185,6 +185,78 @@ void main() {
     });
   });
 
+  group('DropsApi.arrivals', () {
+    test('decodes arrivals and carries every expiry', () async {
+      when(() => client.get(any(), authed: true)).thenAnswer(
+        (_) async => <String, dynamic>{
+          'drop_id': 'd-1',
+          'label': 'Smith matter',
+          'uploads_used': 2,
+          'max_uploads': 5,
+          'state': 'open',
+          'items': [
+            {
+              'transfer_id': 't-1',
+              'enc_header': 'aGVsbG8=',
+              'crypto_suite': 1,
+              'byte_count': 2048,
+              'status': 'uploaded',
+              'created_at': '2026-10-16T09:00:00Z',
+              'expires_at': '2026-10-23T09:00:00Z',
+            },
+            {
+              'transfer_id': 't-2',
+              'enc_header': 'aGVsbG8=',
+              'crypto_suite': 1,
+              'byte_count': 1024,
+              'status': 'delivered',
+              'created_at': '2026-10-15T09:00:00Z',
+              'expires_at': '2026-10-22T09:00:00Z',
+            },
+          ],
+        },
+      );
+
+      final out = await api.arrivals('d-1');
+      expect(out.label, 'Smith matter');
+      expect(out.uploadsUsed, 2);
+      expect(out.maxUploads, 5);
+      expect(out.state, DropState.open);
+      expect(out.items, hasLength(2));
+
+      // A drop is a capability, not a container: every item has to
+      // carry its own expiry or the view starts implying storage.
+      expect(out.items.every((a) => a.expiresAt.isAfter(a.createdAt)), isTrue);
+
+      // Only an uncollected item can be opened.
+      expect(out.items.first.collectable, isTrue);
+      expect(out.items.last.collectable, isFalse);
+
+      final path =
+          verify(() => client.get(captureAny(), authed: true)).captured.single
+              as String;
+      expect(path, '/v1/drops/d-1/uploads');
+    });
+
+    test('an empty link reports no arrivals, not an error', () async {
+      when(() => client.get(any(), authed: true)).thenAnswer(
+        (_) async => <String, dynamic>{
+          'drop_id': 'd-1',
+          'label': 'x',
+          'uploads_used': 1,
+          'max_uploads': 3,
+          'state': 'open',
+          'items': <dynamic>[],
+        },
+      );
+      final out = await api.arrivals('d-1');
+      expect(out.items, isEmpty);
+      // The slot was still spent — an upload was started and abandoned.
+      // Both facts are reported; the screen must not conflate them.
+      expect(out.uploadsUsed, 1);
+    });
+  });
+
   group('DropsApi.revoke', () {
     test('DELETEs the drop and returns the revocation time', () async {
       when(() => client.delete(any(), authed: true)).thenAnswer(
