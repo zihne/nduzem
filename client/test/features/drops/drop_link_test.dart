@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nduzem/features/drops/drop_link.dart';
 
@@ -63,5 +65,57 @@ void main() {
       ),
       throwsArgumentError,
     );
+  });
+
+  group('parseDropFragmentKey', () {
+    test('round-trips with the builder', () {
+      // The property that matters: whatever the owner's client puts in
+      // a link, the uploader's page recovers byte for byte. A parser
+      // that disagrees with the builder encrypts to the wrong key.
+      final url = buildDropUploadUrl(
+        shareUrlBase: Uri.parse('https://nduzem.com'),
+        dropId: 'd-1',
+        identityPubB64: pub,
+      );
+      final recovered = parseDropFragmentKey(Uri.parse(url).fragment);
+      expect(recovered, isNotNull);
+      expect(recovered, equals(base64Decode(pub)));
+    });
+
+    test('handles base64url without padding', () {
+      final recovered = parseDropFragmentKey('k=ab-cd_ef');
+      expect(recovered, equals(base64Decode('ab+cd/ef')));
+    });
+
+    test('adds padding when the length needs it', () {
+      // 32 bytes base64-encodes to 44 chars with one '=' of padding,
+      // which the builder strips. This is the real shape of a key.
+      final key = base64Encode(List<int>.filled(32, 9));
+      final stripped = key.replaceAll('+', '-').replaceAll('/', '_')
+          .replaceAll('=', '');
+      expect(stripped.length % 4, isNot(0), reason: 'needs padding back');
+      expect(parseDropFragmentKey('k=$stripped'), hasLength(32));
+    });
+
+    test('tolerates other fragment params around it', () {
+      final recovered = parseDropFragmentKey('x=1&k=ab-cd_ef&y=2');
+      expect(recovered, equals(base64Decode('ab+cd/ef')));
+    });
+
+    test('returns null for a stripped or malformed fragment', () {
+      // Mail clients and chat apps do strip fragments, and a retyped
+      // link loses everything after the `#`. Null makes the page say
+      // the link is incomplete; a guess would encrypt a document to
+      // nothing and report success.
+      for (final bad in <String>[
+        '',
+        'k=',
+        'nothing-here',
+        'kk=abcd',
+        'k=!!!not base64!!!',
+      ]) {
+        expect(parseDropFragmentKey(bad), isNull, reason: bad);
+      }
+    });
   });
 }

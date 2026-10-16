@@ -24,6 +24,9 @@
 /// mean by "a fragment we never see".
 library;
 
+import 'dart:convert';
+import 'dart:typed_data';
+
 /// Build `https://<host>/drop/<id>#k=<identity_pub>`.
 ///
 /// [identityPubB64] must be the owner's own X25519 public key, read from
@@ -60,4 +63,32 @@ String buildDropUploadUrl({
         : '${shareUrlBase.path}/drop/$dropId',
   );
   return '$base#k=$k';
+}
+
+
+/// Recover the owner's X25519 public key from a drop link's fragment.
+///
+/// The inverse of [buildDropUploadUrl], kept beside it so the two
+/// cannot drift — a parser that silently disagrees with the builder
+/// produces uploads nobody can open.
+///
+/// Returns **null** rather than throwing or guessing when the fragment
+/// is absent or malformed. That happens for real: some mail clients and
+/// chat apps strip URL fragments, and a hand-retyped link loses
+/// everything after the `#`. The uploader page must say the link is
+/// incomplete, because the alternative is encrypting a document to
+/// nothing and reporting success.
+Uint8List? parseDropFragmentKey(String fragment) {
+  if (fragment.isEmpty) return null;
+  final match = RegExp(r'(?:^|&)k=([^&]+)').firstMatch(fragment);
+  final value = match?.group(1);
+  if (value == null || value.isEmpty) return null;
+  try {
+    var b64 = value.replaceAll('-', '+').replaceAll('_', '/');
+    b64 += '=' * ((4 - b64.length % 4) % 4);
+    final bytes = base64Decode(b64);
+    return bytes.isEmpty ? null : Uint8List.fromList(bytes);
+  } on FormatException {
+    return null;
+  }
 }
