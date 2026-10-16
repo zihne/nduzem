@@ -19,6 +19,7 @@ import 'features/history/transfer_history_screen.dart';
 import 'features/home/home_screen.dart';
 import 'features/transfers/batch_send_screen.dart';
 import 'features/settings/delete_account_screen.dart';
+import 'features/drops/drop_upload_screen.dart';
 import 'features/drops/drops_screen.dart';
 import 'features/settings/settings_screen.dart';
 import 'features/transfers/inbox_screen.dart';
@@ -61,7 +62,13 @@ final routerProvider = Provider<GoRouter>((ref) {
           // Link-mode receive is unauthenticated by design (ADR-0010).
           // Signed-out users tapping a share link must be able to
           // land on the receive screen without a login detour.
-          path.startsWith('/r/');
+          path.startsWith('/r/') ||
+          // A file-drop upload is unauthenticated by design (ADR-0040):
+          // the whole feature exists so someone WITHOUT an account can
+          // send a document. Bouncing them to /login would defeat it,
+          // and would do so silently — the link would simply appear to
+          // be a login page.
+          path.startsWith('/drop/');
       if (!isSignedIn && !atAuthSurface) return '/login';
       if (isSignedIn && (path == '/login' || path == '/register')) return '/';
       return null;
@@ -88,6 +95,17 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/drops',
         builder: (_, __) => const DropsScreen(),
+      ),
+      // The uploader's page (ADR-0040 phase 4b). `#k=<owner identity
+      // pub>` rides in the fragment, which the browser never sends to
+      // the server — that is what stops a compromised server
+      // substituting its own key and reading the upload.
+      GoRoute(
+        path: '/drop/:dropId',
+        builder: (context, state) => DropUploadScreen(
+          dropId: state.pathParameters['dropId'] ?? '',
+          fragment: state.uri.fragment,
+        ),
       ),
       GoRoute(
         path: '/settings',

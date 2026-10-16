@@ -4,7 +4,9 @@ import 'package:sodium_libs/sodium_libs.dart';
 import '../../api/api_client.dart';
 import '../../api/auth_api.dart';
 import '../../api/billing_api.dart';
+import '../../api/drop_uploads_api.dart';
 import '../../api/drops_api.dart';
+import '../drops/drop_upload_service.dart';
 import '../../api/links_api.dart';
 import '../../api/transfers_api.dart';
 import '../../api/users_api.dart';
@@ -56,6 +58,7 @@ class _AuthWiring {
     required this.billingApi,
     required this.repository,
     required this.dropsApi,
+    required this.dropUploadsApi,
   });
   final AuthApi authApi;
   final UsersApi usersApi;
@@ -63,6 +66,7 @@ class _AuthWiring {
   final LinksApi linksApi;
   final BillingApi billingApi;
   final DropsApi dropsApi;
+  final DropUploadsApi dropUploadsApi;
   final AuthRepository repository;
 }
 
@@ -83,6 +87,7 @@ final _authWiringProvider = FutureProvider<_AuthWiring>((ref) async {
   final linksApi = LinksApi(client);
   final billingApi = BillingApi(client);
   final dropsApi = DropsApi(client);
+  final dropUploadsApi = DropUploadsApi(client);
   repo = AuthRepository(
     api: authApi,
     usersApi: usersApi,
@@ -98,6 +103,7 @@ final _authWiringProvider = FutureProvider<_AuthWiring>((ref) async {
     linksApi: linksApi,
     billingApi: billingApi,
     dropsApi: dropsApi,
+    dropUploadsApi: dropUploadsApi,
     repository: repo,
   );
 });
@@ -105,6 +111,22 @@ final _authWiringProvider = FutureProvider<_AuthWiring>((ref) async {
 final authRepositoryProvider = FutureProvider<AuthRepository>((ref) async {
   final wiring = await ref.watch(_authWiringProvider.future);
   return wiring.repository;
+});
+
+/// The UNAUTHENTICATED upload path. Reachable with no session at all,
+/// which is the point of the mode — see the `/drop/` entry in the
+/// router's `atAuthSurface` list.
+final dropUploadServiceProvider =
+    FutureProvider<DropUploadService>((ref) async {
+  final wiring = await ref.watch(_authWiringProvider.future);
+  final sodium = await ref.watch(sodiumProvider.future);
+  return DropUploadService(
+    api: wiring.dropUploadsApi,
+    sodium: sodium,
+    fileCrypto: await ref.watch(fileCryptoProvider.future),
+    envelope: await ref.watch(envelopeProvider.future),
+    keys: await ref.watch(keypairGeneratorProvider.future),
+  );
 });
 
 final dropsApiProvider = FutureProvider<DropsApi>((ref) async {
