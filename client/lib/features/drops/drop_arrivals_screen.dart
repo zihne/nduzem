@@ -76,6 +76,50 @@ class _DropArrivalsScreenState extends ConsumerState<DropArrivalsScreen> {
     }
   }
 
+  /// Close the link to further files.
+  ///
+  /// The create dialog promises "you can close it sooner at any time",
+  /// and until now the only way to act on that was an unlabelled icon
+  /// on the list row — invisible on a touch device, where a tooltip
+  /// needs a long press. A promise in the UI has to be reachable from
+  /// where the UI makes it.
+  Future<void> _revoke() async {
+    final data = _data;
+    if (data == null) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Close this upload link?'),
+        content: Text(
+          'Nobody will be able to send you files through "${data.label}" '
+          'after this. Files already sent are not affected, and an upload '
+          'already in progress will still arrive.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Keep it open'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Close it'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      final api = await ref.read(dropsApiProvider.future);
+      await api.revoke(data.dropId);
+      await _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$e')));
+      }
+    }
+  }
+
   static String _bytes(int n) {
     if (n < 1024) return '$n B';
     if (n < 1024 * 1024) return '${(n / 1024).toStringAsFixed(0)} KB';
@@ -141,6 +185,38 @@ class _DropArrivalsScreenState extends ConsumerState<DropArrivalsScreen> {
                           'of them sent which file.',
                           style: text.bodySmall,
                         ),
+                        const SizedBox(height: 16),
+                        if (data.state == DropState.open)
+                          OutlinedButton.icon(
+                            onPressed: _revoke,
+                            icon: const Icon(Icons.link_off),
+                            label: const Text('Close this link'),
+                          )
+                        else
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.lock_outline,
+                                size: 16,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant,
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                switch (data.state) {
+                                  DropState.revoked => 'Closed by you. '
+                                      'Nothing more can be sent here.',
+                                  DropState.expired => 'Expired. Nothing '
+                                      'more can be sent here.',
+                                  DropState.full => 'Full. Nothing more '
+                                      'can be sent here.',
+                                  _ => 'Closed.',
+                                },
+                                style: text.bodySmall,
+                              ),
+                            ],
+                          ),
                         const Divider(height: 32),
                         if (data.items.isEmpty)
                           Text(

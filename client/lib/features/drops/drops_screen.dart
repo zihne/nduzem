@@ -61,11 +61,11 @@ class _DropsScreenState extends ConsumerState<DropsScreen> {
   }
 
   Future<void> _create() async {
-    final label = await showDialog<String>(
+    final spec = await showDialog<_NewLinkSpec>(
       context: context,
       builder: (_) => const _NewLinkDialog(),
     );
-    if (label == null || label.trim().isEmpty) return;
+    if (spec == null) return;
 
     setState(() => _busy = true);
     try {
@@ -77,7 +77,11 @@ class _DropsScreenState extends ConsumerState<DropsScreen> {
         );
       }
       final api = await ref.read(dropsApiProvider.future);
-      final created = await api.create(label: label.trim());
+      final created = await api.create(
+        label: spec.label,
+        maxUploads: spec.maxFiles,
+        expiresInDays: spec.expiresInDays,
+      );
       final config = ref.read(appConfigProvider);
       final url = buildDropUploadUrl(
         shareUrlBase: config.shareUrlBase,
@@ -219,15 +223,37 @@ class _DropTile extends StatelessWidget {
         '$_stateLabel · ${drop.uploadsUsed} of ${drop.maxUploads} files',
       ),
       onTap: () => context.push('/drops/${drop.dropId}'),
+      // `Icons.block` read as "blocked" rather than "stop accepting".
+      // Still an icon here because the row is a summary — the labelled
+      // action lives on the link's own page, which is where the
+      // dialog's "you can close it sooner" sends people.
       trailing: drop.isOpen
           ? IconButton(
               tooltip: 'Close this link',
-              icon: const Icon(Icons.block),
+              icon: const Icon(Icons.link_off),
               onPressed: onRevoke,
             )
           : Icon(Icons.lock_outline, color: scheme.outline),
     );
   }
+}
+
+/// What the create dialog collects.
+///
+/// `max_uploads` and `expires_in_days` were accepted by the API from the
+/// start but never asked for, so every link silently took the defaults —
+/// ten files, thirty days. For "send me one signed contract" versus
+/// "send me everything in the file", that is the difference between a
+/// useful link and a careless one.
+class _NewLinkSpec {
+  const _NewLinkSpec({
+    required this.label,
+    required this.maxFiles,
+    required this.expiresInDays,
+  });
+  final String label;
+  final int maxFiles;
+  final int expiresInDays;
 }
 
 class _NewLinkDialog extends StatefulWidget {
@@ -239,40 +265,93 @@ class _NewLinkDialog extends StatefulWidget {
 class _NewLinkDialogState extends State<_NewLinkDialog> {
   final _controller = TextEditingController();
 
+  // Fixed choices rather than free number entry. The API bounds these
+  // (1..100 files, 1..365 days) and a text field invites a 422 for a
+  // value the owner had no way to know was out of range. It also makes
+  // the useful cases one tap: one document, or a whole file.
+  static const _fileChoices = <int>[1, 3, 5, 10, 25, 50];
+  static const _dayChoices = <int>[7, 14, 30, 90];
+
+  int _maxFiles = 10;
+  int _days = 30;
+
   @override
   void dispose() {
     _controller.dispose();
     super.dispose();
   }
 
+  void _submit() {
+    final label = _controller.text.trim();
+    if (label.isEmpty) return;
+    Navigator.of(context).pop(
+      _NewLinkSpec(
+        label: label,
+        maxFiles: _maxFiles,
+        expiresInDays: _days,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) => AlertDialog(
         title: const Text('New upload link'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            TextField(
-              controller: _controller,
-              autofocus: true,
-              maxLength: 120,
-              decoration: const InputDecoration(
-                labelText: 'What is it for?',
-                helperText: 'Only you can see this.',
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: _controller,
+                autofocus: true,
+                maxLength: 120,
+                decoration: const InputDecoration(
+                  labelText: 'What is it for?',
+                  helperText: 'Only you can see this.',
+                ),
+                onSubmitted: (_) => _submit(),
               ),
-              onSubmitted: (v) => Navigator.of(context).pop(v),
-            ),
-          ],
+              const SizedBox(height: 8),
+              DropdownButtonFormField<int>(
+                initialValue: _maxFiles,
+                decoration: const InputDecoration(
+                  labelText: 'How many files can be sent?',
+                  // "Files", not "uploads": four documents in one go
+                  // spend four of the allowance, because each file is
+                  // its own transfer.
+                  helperText: 'Counts files, not senders.',
+                ),
+                items: [
+                  for (final n in _fileChoices)
+                    DropdownMenuItem(
+                      value: n,
+                      child: Text(n == 1 ? '1 file' : '$n files'),
+                    ),
+                ],
+                onChanged: (v) => setState(() => _maxFiles = v ?? _maxFiles),
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<int>(
+                initialValue: _days,
+                decoration: const InputDecoration(
+                  labelText: 'How long should the link work?',
+                  helperText: 'You can close it sooner at any time.',
+                ),
+                items: [
+                  for (final d in _dayChoices)
+                    DropdownMenuItem(value: d, child: Text('$d days')),
+                ],
+                onChanged: (v) => setState(() => _days = v ?? _days),
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('Cancel'),
           ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(_controller.text),
-            child: const Text('Create'),
-          ),
+          FilledButton(onPressed: _submit, child: const Text('Create')),
         ],
       );
 }
@@ -315,6 +394,17 @@ class _LinkAndPasswordDialog extends StatelessWidget {
               value: created.password,
               monospace: true,
             ),
+            const SizedBox(height: 16),
+            // State the limits here, because this is the moment the
+            // owner is composing the message to their client. They need
+            // to be able to say "send me up to three files by the 16th"
+            // without going back to look it up.
+            Text(
+              'Accepts ${created.maxUploads == 1 ? '1 file' : '${created.maxUploads} files'}, '
+              'up to ${(created.maxBytes / (1024 * 1024 * 1024)).toStringAsFixed(0)} GB each. '
+              'Stops working on ${_date(created.expiresAt)}.',
+              style: text.bodySmall,
+            ),
           ],
         ),
       ),
@@ -326,6 +416,17 @@ class _LinkAndPasswordDialog extends StatelessWidget {
       ],
     );
   }
+}
+
+/// `17 November 2026` — a date someone can repeat in an email, rather
+/// than an ISO timestamp they have to decode.
+String _date(DateTime at) {
+  const months = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December',
+  ];
+  final d = at.toLocal();
+  return '${d.day} ${months[d.month - 1]} ${d.year}';
 }
 
 class _CopyField extends StatelessWidget {
