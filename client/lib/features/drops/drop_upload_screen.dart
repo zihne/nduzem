@@ -363,6 +363,9 @@ class _DropUploadScreenState extends ConsumerState<DropUploadScreen> {
                   children: [
                     Icon(
                       !attempted
+                          // Deliberately not a spinner or a clock: this
+                          // row is not waiting on anything, it is just
+                          // chosen.
                           ? Icons.insert_drive_file_outlined
                           : (failed ? Icons.error_outline : Icons.check),
                       size: 16,
@@ -386,13 +389,21 @@ class _DropUploadScreenState extends ConsumerState<DropUploadScreen> {
             const SizedBox(height: 8),
             // Each file spends one of the link's allowance, so the cost
             // of pressing Send is stated before it is pressed.
+            // Present tense here claimed the upload had started: the
+            // list appears the moment files are chosen, and "Sending 3
+            // files" next to it reads as a progress report. Nothing is
+            // encrypted or sent until Send is pressed, and the copy has
+            // to say which state it is describing — misreporting state
+            // is worse than saying nothing.
             Text(
               _tooMany
                   ? 'Choose up to $_maxPerSubmission files at a time — you '
                       'chose ${_files.length}. Send them in two goes.'
                   : _files.length == 1
-                      ? 'Sending 1 file.'
-                      : 'Sending ${_files.length} files, one after another.',
+                      ? 'Ready to send. Nothing leaves this browser until '
+                          'you press Send.'
+                      : '${_files.length} files ready. They will be sent '
+                          'one after another when you press Send.',
               style: text.bodySmall?.copyWith(
                 color: _tooMany
                     ? Theme.of(context).colorScheme.error
