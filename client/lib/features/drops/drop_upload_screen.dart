@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../api/api_client.dart';
+import '../../api/drop_uploads_api.dart';
 import '../../widgets/max_width_content.dart';
 import '../auth/auth_providers.dart';
 import '../transfers/picked_file.dart';
@@ -45,7 +47,16 @@ class DropUploadScreen extends ConsumerStatefulWidget {
 
 class _DropUploadScreenState extends ConsumerState<DropUploadScreen> {
   final _password = TextEditingController();
-  PickedFile? _file;
+
+  /// Chosen files, in the order they will be sent. One file is one
+  /// transfer and one upload slot — there is no batch on the server and
+  /// a drop is a capability, not a container.
+  List<PickedFile> _files = const [];
+
+  /// Per-file outcome, by index. Absent means not attempted yet.
+  final Map<int, String?> _results = {};
+
+  int _current = 0;
   bool _busy = false;
   String? _error;
   bool _done = false;
@@ -105,71 +116,161 @@ class _DropUploadScreenState extends ConsumerState<DropUploadScreen> {
     final picked = await pickFilesWeb();
     if (picked.isEmpty || !mounted) return;
     setState(() {
-      _file = picked.first;
+      _files = picked;
+      _results.clear();
       _error = null;
     });
   }
 
   /// Both halves present. Named rather than inlined so the button and
   /// the hint beneath it cannot drift apart.
-  bool get _canSend => _file != null && _password.text.trim().isNotEmpty;
+  /// Most files one submission may carry.
+  ///
+  /// Not a product rule but a consequence of one: each file is an
+  /// `/initiate` and a `/commit`, both per-IP rate limited, so a large
+  /// selection used to fail part-way through on a 429 that said nothing
+  /// useful. Ten fits comfortably inside the window with room for
+  /// retries, and a stated limit beats a discovered one.
+  ///
+  /// The drop's own `max_uploads` is the real bound and applies across
+  /// every submission; this only bounds one pass.
+  static const _maxPerSubmission = 10;
+
+  bool get _tooMany => _files.length > _maxPerSubmission;
+
+  bool get _canSend =>
+      _files.isNotEmpty && !_tooMany && _password.text.trim().isNotEmpty;
+
+  int get _sentCount => _results.values.where((e) => e == null).length;
+  int get _failedCount => _results.values.where((e) => e != null).length;
 
   Future<void> _send() async {
-    final file = _file;
     final key = _ownerKey;
-    if (file == null || key == null) return;
+    if (_files.isEmpty || key == null) return;
     setState(() {
       _busy = true;
       _error = null;
-      _progressDone = 0;
-      _progressTotal = file.length;
+      _results.clear();
     });
+
+    // Checked once, up front. Each file still fails individually if the
+    // link fills part-way through — the server is authoritative — but
+    // this stops ten files costing ten info calls against a bucket of
+    // ten.
+    DropUploadInfo? batchInfo;
     try {
       final svc = await ref.read(dropUploadServiceProvider.future);
-      await svc.upload(
-        dropId: widget.dropId,
-        password: _password.text.trim(),
-        source: file.source,
-        ownerIdentityPub: key,
-        onProgress: (phase, done, total) {
-          if (!mounted) return;
+      batchInfo = await svc.info(widget.dropId);
+      if (!batchInfo.open) {
+        if (mounted) {
           setState(() {
-            _phase = phase;
-            _progressDone = done;
-            _progressTotal = total == 0 ? 1 : total;
+            _busy = false;
+            _open = false;
           });
-        },
-      );
-      if (mounted) setState(() => _done = true);
-    } on DropFileTooLargeException catch (e) {
-      if (mounted) {
-        setState(
-          () => _error = 'That file is too big. The limit for this link is '
-              '${(e.maxBytes / (1024 * 1024)).toStringAsFixed(0)} MB.',
-        );
+        }
+        return;
       }
-    } on DropClosedException {
+    } catch (_) {
       if (mounted) {
         setState(() {
-          _open = false;
-          _error = null;
+          _busy = false;
+          _error = 'Could not reach the service. Check your connection '
+              'and try again.';
         });
       }
-    } catch (e) {
-      // The server answers a uniform 404 for a wrong password, a closed
-      // link and an unknown one. We cannot tell them apart and must not
-      // guess — so the message covers the cause the uploader can
-      // actually act on, and mentions the others as possibilities.
-      if (mounted) {
-        setState(
-          () => _error =
-              'That did not work. Check the password you were given. If it '
-              'is correct, the link may have expired or already been used.',
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _busy = false);
+      return;
     }
+
+    // Sequential, not parallel. Three reasons, in order of how much they
+    // matter: the service buffers a whole ciphertext in memory before
+    // PUTting it, so N at once is N files of RAM; the per-IP rate limit
+    // is a fixed window and a burst of parallel initiates is the
+    // easiest way to hit it; and a serial run gives the uploader a
+    // truthful "3 of 4" rather than four spinners.
+    for (var i = 0; i < _files.length; i++) {
+      if (!mounted) return;
+      setState(() {
+        _current = i;
+        _progressDone = 0;
+        _progressTotal = _files[i].length;
+      });
+      try {
+        final svc = await ref.read(dropUploadServiceProvider.future);
+        await svc.upload(
+          dropId: widget.dropId,
+          password: _password.text.trim(),
+          source: _files[i].source,
+          ownerIdentityPub: key,
+          // One info call for the whole submission. Fetched fresh at
+          // the start of the run below, so it still reflects a link
+          // that was open when the user pressed Send.
+          knownInfo: batchInfo,
+          onProgress: (phase, done, total) {
+            if (!mounted) return;
+            setState(() {
+              _phase = phase;
+              _progressDone = done;
+              _progressTotal = total == 0 ? 1 : total;
+            });
+          },
+        );
+        if (mounted) setState(() => _results[i] = null);
+      } on DropFileTooLargeException catch (e) {
+        if (mounted) {
+          setState(
+            () => _results[i] = 'Too big — the limit is '
+                '${(e.maxBytes / (1024 * 1024)).toStringAsFixed(0)} MB',
+          );
+        }
+      } on DropClosedException {
+        // The link filled up or was closed part-way through. Stop:
+        // every further attempt would fail the same way, and each one
+        // costs the owner a slot.
+        if (mounted) {
+          setState(() {
+            _results[i] = 'The link stopped accepting files';
+            _open = false;
+          });
+        }
+        break;
+      } on ApiException catch (e) {
+        // 507 is the recipient being out of storage, which the server
+        // now detects at /initiate — before the bytes move. Its own
+        // wording is better than anything generic we could substitute,
+        // and it is the one failure here the uploader cannot fix by
+        // retrying, so it must not read as a transient error.
+        //
+        // Note the cumulative case handles itself: uploads run in
+        // sequence and each commit charges before the next initiate, so
+        // three 1 GB files against 2 GB of headroom land two and refuse
+        // the third BEFORE uploading it.
+        if (mounted) {
+          setState(
+            () => _results[i] = e.statusCode == 507
+                ? 'The recipient is out of storage'
+                : 'Did not send',
+          );
+        }
+        if (e.statusCode == 507) break;
+      } catch (e) {
+        if (mounted) setState(() => _results[i] = 'Did not send');
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      // "Done" means at least one file is now the recipient's. Anything
+      // that failed is listed alongside, because a partial success
+      // reported as success is how someone believes they sent a document
+      // they did not send.
+      _done = _sentCount > 0 && _failedCount == 0;
+      if (_sentCount == 0) {
+        _error = 'Nothing was sent. Check the password you were given. If '
+            'it is correct, the link may have expired or already been '
+            'used.';
+      }
+    });
   }
 
   @override
@@ -208,11 +309,14 @@ class _DropUploadScreenState extends ConsumerState<DropUploadScreen> {
       return const Center(child: CircularProgressIndicator());
     }
     if (_done) {
+      final many = _sentCount > 1;
       return _Message(
-        title: 'Sent',
-        body: 'Your file was encrypted in this browser before it was '
-            'uploaded, so it can only be opened by the person who gave you '
-            'this link. We cannot read it.\n\n'
+        title: many ? '$_sentCount files sent' : 'Sent',
+        body: '${many ? 'Your files were' : 'Your file was'} encrypted in '
+            'this browser before being uploaded, so '
+            '${many ? 'they' : 'it'} can only be opened by the person who '
+            'gave you this link. We cannot read '
+            '${many ? 'them' : 'it'}.\n\n'
             'You can close this page.',
       );
     }
@@ -239,13 +343,61 @@ class _DropUploadScreenState extends ConsumerState<DropUploadScreen> {
           OutlinedButton.icon(
             onPressed: _busy ? null : _pick,
             icon: const Icon(Icons.attach_file),
-            label: Text(_file == null ? 'Choose a file' : 'Choose a different file'),
+            label: Text(
+              _files.isEmpty ? 'Choose files' : 'Choose different files',
+            ),
           ),
-          if (_file != null) ...[
+          if (_files.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            // One row per file, with its outcome once sent. A partial
+            // success has to be legible: "3 sent, 1 failed" told as a
+            // single status line is how someone believes they sent a
+            // document they did not send.
+            ...List.generate(_files.length, (i) {
+              final outcome = _results[i];
+              final attempted = _results.containsKey(i);
+              final failed = attempted && outcome != null;
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Row(
+                  children: [
+                    Icon(
+                      !attempted
+                          ? Icons.insert_drive_file_outlined
+                          : (failed ? Icons.error_outline : Icons.check),
+                      size: 16,
+                      color: failed
+                          ? Theme.of(context).colorScheme.error
+                          : Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        '${_files[i].name} · '
+                        '${(_files[i].length / (1024 * 1024)).toStringAsFixed(1)} MB'
+                        '${failed ? ' · $outcome' : ''}',
+                        style: text.bodySmall,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }),
             const SizedBox(height: 8),
+            // Each file spends one of the link's allowance, so the cost
+            // of pressing Send is stated before it is pressed.
             Text(
-              '${_file!.name} · ${(_file!.length / (1024 * 1024)).toStringAsFixed(1)} MB',
-              style: text.bodySmall,
+              _tooMany
+                  ? 'Choose up to $_maxPerSubmission files at a time — you '
+                      'chose ${_files.length}. Send them in two goes.'
+                  : _files.length == 1
+                      ? 'Sending 1 file.'
+                      : 'Sending ${_files.length} files, one after another.',
+              style: text.bodySmall?.copyWith(
+                color: _tooMany
+                    ? Theme.of(context).colorScheme.error
+                    : null,
+              ),
             ),
           ],
           if (_maxBytes > 0) ...[
@@ -264,11 +416,12 @@ class _DropUploadScreenState extends ConsumerState<DropUploadScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              switch (_phase) {
-                DropUploadPhase.encrypting => 'Encrypting…',
-                DropUploadPhase.uploading => 'Uploading…',
-                DropUploadPhase.done => 'Finishing…',
-              },
+              '${switch (_phase) {
+                DropUploadPhase.encrypting => 'Encrypting',
+                DropUploadPhase.uploading => 'Uploading',
+                DropUploadPhase.done => 'Finishing',
+              }} ${_files.length > 1 ? '${_current + 1} of ${_files.length} ' : ''}'
+              '— ${_files[_current].name}',
               style: text.bodySmall,
             ),
           ] else ...[
@@ -281,12 +434,31 @@ class _DropUploadScreenState extends ConsumerState<DropUploadScreen> {
             if (!_canSend) ...[
               const SizedBox(height: 8),
               Text(
-                _file == null
-                    ? 'Choose a file to send.'
-                    : 'Enter the password you were sent.',
+                _files.isEmpty
+                    ? 'Choose one or more files to send.'
+                    : _tooMany
+                        ? 'Too many files chosen.'
+                        : 'Enter the password you were sent.',
                 style: text.bodySmall,
               ),
             ],
+          ],
+          // Partial outcome: some landed, some did not. `_done` stays
+          // false so the form remains usable for a retry, and this says
+          // plainly where things stand — the per-file icons alone leave
+          // the reader to count.
+          if (!_busy && _failedCount > 0) ...[
+            const SizedBox(height: 16),
+            Text(
+              _sentCount == 0
+                  ? 'Nothing was sent.'
+                  : '$_sentCount sent, $_failedCount did not. The ones that '
+                      'arrived are already with the recipient — choose just '
+                      'the failed files and try those again.',
+              style: text.bodyMedium?.copyWith(
+                color: Theme.of(context).colorScheme.error,
+              ),
+            ),
           ],
           if (_error != null) ...[
             const SizedBox(height: 16),

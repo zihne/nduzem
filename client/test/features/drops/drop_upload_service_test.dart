@@ -291,6 +291,84 @@ void main() async {
         );
       });
 
+      test('a shared info call skips the per-file fetch', () async {
+        // Ten files used to mean ten `info` calls against a bucket of
+        // ten, so the eleventh failed on a rate limit and said nothing
+        // useful about why. A batch passes one info for all of them.
+        final api = _FakeApi();
+        stubOpen(api);
+        when(
+          () => api.commit(
+            dropId: any(named: 'dropId'),
+            password: any(named: 'password'),
+            transferId: any(named: 'transferId'),
+            blobSha256Hex: any(named: 'blobSha256Hex'),
+            encHeaderB64: any(named: 'encHeaderB64'),
+            signatureB64: any(named: 'signatureB64'),
+            wrappedKeyB64: any(named: 'wrappedKeyB64'),
+            senderIdentityPubB64: any(named: 'senderIdentityPubB64'),
+            senderSigningPubB64: any(named: 'senderSigningPubB64'),
+            cryptoSuite: any(named: 'cryptoSuite'),
+          ),
+        ).thenAnswer((_) async => 1);
+
+        final svc = build(api);
+        const shared = DropUploadInfo(
+          open: true,
+          maxBytes: 10 * 1024 * 1024,
+          passwordRequired: true,
+        );
+        for (var i = 0; i < 3; i++) {
+          await svc.upload(
+            dropId: 'd-1',
+            password: 'pw',
+            source: _MemorySource(List<int>.filled(32, i)),
+            ownerIdentityPub: owner.identityPublic,
+            knownInfo: shared,
+          );
+        }
+        verifyNever(() => api.info(any()));
+
+        // Without it, each upload still checks for itself — a
+        // single-file caller should not have to know to pass one.
+        await svc.upload(
+          dropId: 'd-1',
+          password: 'pw',
+          source: _MemorySource(const [1, 2, 3]),
+          ownerIdentityPub: owner.identityPublic,
+        );
+        verify(() => api.info(any())).called(1);
+      });
+
+      test('a shared info that says closed is still honoured', () async {
+        // The caller must not be able to bypass the check by handing in
+        // a stale or forged "open" — and equally, a closed one has to
+        // stop the upload rather than be ignored.
+        final api = _FakeApi();
+        stubOpen(api);
+        await expectLater(
+          build(api).upload(
+            dropId: 'd-1',
+            password: 'pw',
+            source: _MemorySource(const [1, 2, 3]),
+            ownerIdentityPub: owner.identityPublic,
+            knownInfo: const DropUploadInfo(
+              open: false,
+              maxBytes: 1024,
+              passwordRequired: true,
+            ),
+          ),
+          throwsA(isA<DropClosedException>()),
+        );
+        verifyNever(
+          () => api.initiate(
+            dropId: any(named: 'dropId'),
+            password: any(named: 'password'),
+            byteCount: any(named: 'byteCount'),
+          ),
+        );
+      });
+
       test('refuses a closed link without consuming a slot', () async {
         final api = _FakeApi();
         when(() => api.info(any())).thenAnswer(

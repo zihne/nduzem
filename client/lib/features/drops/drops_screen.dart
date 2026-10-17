@@ -212,7 +212,11 @@ class _DropTile extends StatelessWidget {
     return ListTile(
       title: Text(drop.label),
       subtitle: Text(
-        '$_stateLabel · ${drop.uploadsUsed} of ${drop.maxUploads} used',
+        // "files", not "uploads": one submission of four documents
+        // spends four of the allowance, because each file is its own
+        // transfer. Calling them uploads invites the reading
+        // "four people sent me something".
+        '$_stateLabel · ${drop.uploadsUsed} of ${drop.maxUploads} files',
       ),
       onTap: () => context.push('/drops/${drop.dropId}'),
       trailing: drop.isOpen

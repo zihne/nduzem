@@ -115,7 +115,7 @@ class _DropArrivalsScreenState extends ConsumerState<DropArrivalsScreen> {
                       padding: const EdgeInsets.all(16),
                       children: [
                         Text(
-                          '${data.uploadsUsed} of ${data.maxUploads} uploads '
+                          '${data.uploadsUsed} of ${data.maxUploads} files '
                           'used.',
                           style: text.bodyMedium,
                         ),
@@ -149,7 +149,7 @@ class _DropArrivalsScreenState extends ConsumerState<DropArrivalsScreen> {
                                 // allowance is spent and no file came.
                                 // Saying "nothing yet" alone would make
                                 // the counter above look wrong.
-                                ? 'Nothing has arrived. An upload was '
+                                ? 'Nothing has arrived. A file was '
                                     'started but never finished, which '
                                     'still uses one of the allowance.'
                                 : 'Nothing has arrived yet.',
