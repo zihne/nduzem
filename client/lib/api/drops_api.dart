@@ -201,6 +201,7 @@ class DropArrival {
   const DropArrival({
     required this.transferId,
     required this.encHeaderB64,
+    required this.wrappedKeyB64,
     required this.cryptoSuite,
     required this.byteCount,
     required this.status,
@@ -211,6 +212,7 @@ class DropArrival {
   factory DropArrival.fromJson(Map<String, dynamic> json) => DropArrival(
         transferId: json['transfer_id'] as String,
         encHeaderB64: json['enc_header'] as String,
+        wrappedKeyB64: json['wrapped_key'] as String?,
         cryptoSuite: (json['crypto_suite'] as num).toInt(),
         byteCount: (json['byte_count'] as num).toInt(),
         status: json['status'] as String,
@@ -220,9 +222,14 @@ class DropArrival {
 
   final String transferId;
 
-  /// The filename lives in here, encrypted. The server cannot read it
-  /// and neither can this class — the screen decrypts it locally.
+  /// The filename lives in here, encrypted. The server cannot read it;
+  /// the owner's device can, with [wrappedKeyB64].
   final String encHeaderB64;
+
+  /// `K_file` sealed to the owner's X25519 key. Served on this list
+  /// endpoint rather than only by `/download`, which would have spent
+  /// the single download a drop upload allows just to read a filename.
+  final String? wrappedKeyB64;
   final int cryptoSuite;
   final int byteCount;
 

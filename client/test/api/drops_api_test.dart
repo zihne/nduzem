@@ -198,6 +198,7 @@ void main() {
             {
               'transfer_id': 't-1',
               'enc_header': 'aGVsbG8=',
+              'wrapped_key': 'd3JhcHBlZA==',
               'crypto_suite': 1,
               'byte_count': 2048,
               'status': 'uploaded',
@@ -207,6 +208,7 @@ void main() {
             {
               'transfer_id': 't-2',
               'enc_header': 'aGVsbG8=',
+              'wrapped_key': null,
               'crypto_suite': 1,
               'byte_count': 1024,
               'status': 'delivered',
@@ -231,6 +233,13 @@ void main() {
       // Only an uncollected item can be opened.
       expect(out.items.first.collectable, isTrue);
       expect(out.items.last.collectable, isFalse);
+
+      // The sealed key travels with the row so the client can show the
+      // real filename without spending the single download.
+      expect(out.items.first.wrappedKeyB64, 'd3JhcHBlZA==');
+      // Null is valid — link mode has no wrapped key — and must not
+      // throw.
+      expect(out.items.last.wrappedKeyB64, isNull);
 
       final path =
           verify(() => client.get(captureAny(), authed: true)).captured.single
