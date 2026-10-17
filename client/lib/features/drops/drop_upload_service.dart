@@ -68,11 +68,21 @@ class DropUploadService {
   /// [ownerIdentityPub] is the owner's X25519 public key, taken from the
   /// link fragment. Throws [ArgumentError] if it is empty rather than
   /// sealing to nothing.
+  /// [knownInfo] lets a multi-file submission share one `GET /info`
+  /// across all its files. Without it this method fetches info per
+  /// file, which for ten files is ten calls against a bucket of ten —
+  /// so the eleventh file failed on a rate limit rather than on
+  /// anything about the file, and said so unhelpfully.
+  ///
+  /// Still fetched when absent: a single-file caller should not have to
+  /// know to pass it, and the check has to happen before `/initiate`
+  /// spends one of the owner's slots.
   Future<DropUploadResult> upload({
     required String dropId,
     required String password,
     required PlaintextSource source,
     required Uint8List ownerIdentityPub,
+    DropUploadInfo? knownInfo,
     void Function(DropUploadPhase phase, int done, int total)? onProgress,
   }) async {
     if (ownerIdentityPub.isEmpty) {
@@ -88,7 +98,7 @@ class DropUploadService {
     // reserves a slot whether or not the upload completes, so a size
     // check afterwards would cost them an allowance for a file that was
     // never going to be accepted.
-    final info = await _api.info(dropId);
+    final info = knownInfo ?? await _api.info(dropId);
     if (!info.open) {
       throw const DropClosedException();
     }
