@@ -6,11 +6,12 @@ import '../../api/auth_api.dart';
 import '../../api/billing_api.dart';
 import '../../api/drop_uploads_api.dart';
 import '../../api/drops_api.dart';
-import '../drops/drop_upload_service.dart';
 import '../../api/links_api.dart';
 import '../../api/transfers_api.dart';
 import '../../api/users_api.dart';
 import '../../core/config.dart';
+import '../drops/drop_upload_service.dart';
+import '../transfers/envelope_peek.dart';
 import '../../crypto/envelope.dart';
 import '../../crypto/file_crypto.dart';
 import '../../crypto/keys.dart';
@@ -126,6 +127,18 @@ final dropUploadServiceProvider =
     fileCrypto: await ref.watch(fileCryptoProvider.future),
     envelope: await ref.watch(envelopeProvider.future),
     keys: await ref.watch(keypairGeneratorProvider.future),
+  );
+});
+
+/// Reads a transfer's filename without downloading it — on-device, with
+/// this account's own keys. See `envelope_peek.dart`.
+final envelopePeekProvider = FutureProvider<EnvelopePeek>((ref) async {
+  final sodium = await ref.watch(sodiumProvider.future);
+  return EnvelopePeek(
+    sodium: sodium,
+    sealedBox: SealedBox(sodium),
+    envelope: await ref.watch(envelopeProvider.future),
+    storage: ref.watch(secureStorageProvider),
   );
 });
 

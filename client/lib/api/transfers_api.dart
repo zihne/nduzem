@@ -309,6 +309,7 @@ class InboxItem {
     required this.expiresAt,
     this.dropId,
     this.dropLabel,
+    this.wrappedKeyB64,
   });
 
   final String transferId;
@@ -321,6 +322,11 @@ class InboxItem {
   /// link for a purpose.
   final String? dropId;
   final String? dropLabel;
+
+  /// `K_file` sealed to this account's X25519 key, so the client can
+  /// open `encHeaderB64` locally and show the real filename. Null in
+  /// link mode, where K_file rides in the URL fragment.
+  final String? wrappedKeyB64;
   final String encHeaderB64;
   final int cryptoSuite;
   final int byteCount;
@@ -338,6 +344,7 @@ class InboxItem {
         expiresAt: DateTime.parse(m['expires_at'] as String),
         dropId: m['drop_id'] as String?,
         dropLabel: m['drop_label'] as String?,
+        wrappedKeyB64: m['wrapped_key'] as String?,
       );
 }
 

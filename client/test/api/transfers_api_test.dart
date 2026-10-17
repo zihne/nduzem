@@ -331,6 +331,7 @@ void main() {
               'sender_handle': null,
               'drop_id': 'd-1',
               'drop_label': 'Smith matter',
+              'wrapped_key': 'd3JhcHBlZA==',
               'enc_header': 'EH',
               'crypto_suite': 1,
               'byte_count': 2048,
@@ -346,6 +347,7 @@ void main() {
       expect(item.senderHandle, isNull);
       expect(item.dropId, 'd-1');
       expect(item.dropLabel, 'Smith matter');
+      expect(item.wrappedKeyB64, 'd3JhcHBlZA==');
     });
   });
 

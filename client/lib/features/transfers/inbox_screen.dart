@@ -194,7 +194,12 @@ class _InboxTile extends StatelessWidget {
   /// them looking for something that does not exist.
   static String _senderCaveat(InboxItem item, bool senderVerified) {
     if (item.dropId != null) {
-      return "Sent using your upload link — we can't confirm who sent it";
+      // Not "we can't confirm who sent it": true, but it reads as a
+      // security failure. This bounds the sender set instead, which is
+      // equally true and actually tells the recipient something — the
+      // sender is someone they chose to give the link to.
+      return 'Sent through a link you created — one of the people you '
+          'gave it to';
     }
     return senderVerified
         ? 'Verified sender'

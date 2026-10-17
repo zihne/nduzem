@@ -31,6 +31,11 @@ class _DropArrivalsScreenState extends ConsumerState<DropArrivalsScreen> {
   DropArrivals? _data;
   String? _error;
 
+  /// transfer_id -> filename, decrypted on this device. Absent means we
+  /// could not open the envelope (keys from another device, say), and
+  /// the row falls back to showing its size.
+  final Map<String, String> _names = {};
+
   @override
   void initState() {
     super.initState();
@@ -43,8 +48,31 @@ class _DropArrivalsScreenState extends ConsumerState<DropArrivalsScreen> {
       final api = await ref.read(dropsApiProvider.future);
       final data = await api.arrivals(widget.dropId);
       if (mounted) setState(() => _data = data);
+      await _resolveNames(data);
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
+    }
+  }
+
+  /// Open each envelope locally to recover the filename.
+  ///
+  /// This is on-device work with this account's own keys — the server
+  /// cannot do it and is not asked to. It happens after the list is
+  /// already on screen so a slow keystore never delays the view.
+  Future<void> _resolveNames(DropArrivals data) async {
+    final session = ref.read(authSessionProvider).valueOrNull;
+    if (session == null) return;
+    final peek = await ref.read(envelopePeekProvider.future);
+    for (final a in data.items) {
+      final header = await peek.peek(
+        userId: session.userId,
+        wrappedKeyB64: a.wrappedKeyB64,
+        encHeaderB64: a.encHeaderB64,
+        cryptoSuite: a.cryptoSuite,
+      );
+      if (header != null && mounted) {
+        setState(() => _names[a.transferId] = header.filename);
+      }
     }
   }
 
@@ -100,6 +128,19 @@ class _DropArrivalsScreenState extends ConsumerState<DropArrivalsScreen> {
                           'whichever comes first.',
                           style: text.bodySmall,
                         ),
+                        const SizedBox(height: 8),
+                        // Said once, here, rather than as a warning on
+                        // every row. "We can't confirm who sent it" is
+                        // true and reads as a failure; this is equally
+                        // true and actually informative — the sender is
+                        // someone the owner chose to give the link to,
+                        // not a stranger.
+                        Text(
+                          'Only people you gave this link and its password '
+                          'to can send files here. We cannot tell you which '
+                          'of them sent which file.',
+                          style: text.bodySmall,
+                        ),
                         const Divider(height: 32),
                         if (data.items.isEmpty)
                           Text(
@@ -123,21 +164,21 @@ class _DropArrivalsScreenState extends ConsumerState<DropArrivalsScreen> {
                                     ? Icons.insert_drive_file_outlined
                                     : Icons.history,
                               ),
-                              // The filename is inside `enc_header` and
-                              // only the owner's key opens it. Decrypting
-                              // it here needs the receive pipeline, so
-                              // until that is wired in the row is honest
-                              // about what it can show rather than
-                              // inventing a name.
+                              // The filename, decrypted on this device.
+                              // Falls back to "File" only when the
+                              // envelope cannot be opened here — keys
+                              // from another device, typically — rather
+                              // than inventing a name.
                               title: Text(
-                                a.collectable
-                                    ? 'File · ${_bytes(a.byteCount)}'
-                                    : 'File · ${_bytes(a.byteCount)} · no longer available',
+                                [
+                                  _names[a.transferId] ?? 'File',
+                                  _bytes(a.byteCount),
+                                  if (!a.collectable) 'no longer available',
+                                ].join(' · '),
                               ),
                               subtitle: Text(
                                 a.collectable
-                                    ? '${_expiry(a.expiresAt)} · '
-                                        "we can't confirm who sent it"
+                                    ? _expiry(a.expiresAt)
                                     : 'Arrived ${a.createdAt.toLocal()}',
                               ),
                               trailing: a.collectable
