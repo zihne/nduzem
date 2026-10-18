@@ -91,6 +91,12 @@ esac
 # derivation, so passing this arg explicitly is optional when the
 # `api.<host>` / `<host>` convention holds).
 SHARE_URL_BASE="${2:-${NDUZEM_SHARE_URL_BASE:-}}"
+# Where the web app is served. Distinct from SHARE_URL_BASE, which is
+# the bare marketing host on purpose (Android App Links, assetlinks,
+# readability). File-drop upload links must OPEN the app, and pointing
+# them at the marketing host shipped once: the link resolved to
+# nduzem.com and did nothing.
+APP_URL_BASE="${APP_URL_BASE:-https://app.nduzem.com}"
 if [[ -z "$SHARE_URL_BASE" ]]; then
     # Derive by stripping a leading `api.` from the URL's host.
     #
@@ -213,6 +219,7 @@ say "  Commit:     $GIT_COMMIT_SHORT"
 "${FLUTTER[@]}" build appbundle --release \
     --dart-define=NDUZEM_API_BASE="$API_BASE" \
     --dart-define=NDUZEM_SHARE_URL_BASE="$SHARE_URL_BASE" \
+    --dart-define=NDUZEM_APP_URL_BASE="$APP_URL_BASE" \
     --dart-define=NDUZEM_GIT_COMMIT="$GIT_COMMIT"
 
 AAB="$CLIENT_ROOT/build/app/outputs/bundle/release/app-release.aab"

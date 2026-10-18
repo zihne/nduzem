@@ -78,6 +78,12 @@ esac
 # Share URL base — same derivation as build-release.sh so the two
 # scripts stay in lockstep on how they compute defaults.
 SHARE_URL_BASE="${2:-${NDUZEM_SHARE_URL_BASE:-}}"
+# Where the web app is served. Distinct from SHARE_URL_BASE, which is
+# the bare marketing host on purpose (Android App Links, assetlinks,
+# readability). File-drop upload links must OPEN the app, and pointing
+# them at the marketing host shipped once: the link resolved to
+# nduzem.com and did nothing.
+APP_URL_BASE="${APP_URL_BASE:-https://app.nduzem.com}"
 if [[ -z "$SHARE_URL_BASE" ]]; then
     # Derive by stripping a leading `api.` from the URL's host.
     #
@@ -167,7 +173,8 @@ say "  Share URL:  $SHARE_URL_BASE"
 "${FLUTTER[@]}" build web --release \
     --no-web-resources-cdn \
     --dart-define=NDUZEM_API_BASE="$API_BASE" \
-    --dart-define=NDUZEM_SHARE_URL_BASE="$SHARE_URL_BASE"
+    --dart-define=NDUZEM_SHARE_URL_BASE="$SHARE_URL_BASE" \
+    --dart-define=NDUZEM_APP_URL_BASE="$APP_URL_BASE"
 
 BUNDLE_DIR="$CLIENT_ROOT/build/web"
 if [[ ! -f "$BUNDLE_DIR/index.html" ]]; then
