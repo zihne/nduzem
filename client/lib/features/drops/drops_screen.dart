@@ -84,7 +84,11 @@ class _DropsScreenState extends ConsumerState<DropsScreen> {
       );
       final config = ref.read(appConfigProvider);
       final url = buildDropUploadUrl(
-        shareUrlBase: config.shareUrlBase,
+        // appUrlBase, NOT shareUrlBase. The share host is the bare
+        // marketing domain by design (Android App Links, assetlinks,
+        // readability) and a drop link opened there lands on the
+        // marketing site and does nothing.
+        appUrlBase: config.appUrlBase,
         dropId: created.dropId,
         identityPubB64: identityPub,
       );

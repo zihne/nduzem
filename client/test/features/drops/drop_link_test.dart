@@ -1,14 +1,19 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nduzem/core/config.dart';
 import 'package:nduzem/features/drops/drop_link.dart';
+
+final _api = Uri.parse('https://api.nduzem.com');
+final _marketing = Uri.parse('https://nduzem.com');
+final _app = Uri.parse('https://app.nduzem.com');
 
 void main() {
   const pub = 'jud4aI0FPjlg4ehcRMdjQLQwQwsf2YrCVSLSIFoSHFA=';
 
   test('route and key both live inside the fragment', () {
     final url = buildDropUploadUrl(
-      shareUrlBase: Uri.parse('https://nduzem.com'),
+      appUrlBase: Uri.parse('https://nduzem.com'),
       dropId: 'abc-123',
       identityPubB64: pub,
     );
@@ -32,7 +37,7 @@ void main() {
 
   test('base64url-encodes without padding, matching link mode', () {
     final url = buildDropUploadUrl(
-      shareUrlBase: Uri.parse('https://nduzem.com'),
+      appUrlBase: Uri.parse('https://nduzem.com'),
       dropId: 'd',
       identityPubB64: 'ab+cd/ef==',
     );
@@ -42,7 +47,7 @@ void main() {
   test('normalises a base with or without a trailing slash', () {
     for (final base in ['https://nduzem.com', 'https://nduzem.com/']) {
       final url = buildDropUploadUrl(
-        shareUrlBase: Uri.parse(base),
+        appUrlBase: Uri.parse(base),
         dropId: 'x',
         identityPubB64: pub,
       );
@@ -56,7 +61,7 @@ void main() {
     // unusable — fail where the mistake is, not at the uploader.
     expect(
       () => buildDropUploadUrl(
-        shareUrlBase: Uri.parse('https://nduzem.com'),
+        appUrlBase: Uri.parse('https://nduzem.com'),
         dropId: 'x',
         identityPubB64: '',
       ),
@@ -64,12 +69,42 @@ void main() {
     );
     expect(
       () => buildDropUploadUrl(
-        shareUrlBase: Uri.parse('https://nduzem.com'),
+        appUrlBase: Uri.parse('https://nduzem.com'),
         dropId: '',
         identityPubB64: pub,
       ),
       throwsArgumentError,
     );
+  });
+
+  group('the origin a drop link points at', () {
+    test('uses the app origin, not the marketing host', () {
+      // The bug this exists for: drop links were built from
+      // AppConfig.shareUrlBase, which is the bare marketing domain by
+      // design. In production that produced
+      // https://nduzem.com/#/drop/... which resolves to the marketing
+      // site and does nothing. It survived local testing because in
+      // development the web app and the share host are the same origin.
+      final config = AppConfig(
+        apiBaseUrl: _api,
+        shareUrlBase: _marketing,
+        appUrlBase: _app,
+      );
+      final url = buildDropUploadUrl(
+        appUrlBase: config.appUrlBase,
+        dropId: 'd-1',
+        identityPubB64: pub,
+      );
+      expect(url, startsWith('https://app.nduzem.com/#/drop/d-1'));
+      expect(url, isNot(contains('//nduzem.com')));
+    });
+
+    test('falls back to the share host when no app origin is given', () {
+      // Keeps every existing AppConfig construction working, and keeps
+      // local development (one host for everything) unchanged.
+      final config = AppConfig(apiBaseUrl: _api, shareUrlBase: _marketing);
+      expect(config.appUrlBase, _marketing);
+    });
   });
 
   group('decodeOwnerKeyParam', () {
@@ -78,7 +113,7 @@ void main() {
       // a link, the uploader's page recovers byte for byte. A parser
       // that disagrees with the builder encrypts to the wrong key.
       final url = buildDropUploadUrl(
-        shareUrlBase: Uri.parse('https://nduzem.com'),
+        appUrlBase: Uri.parse('https://nduzem.com'),
         dropId: 'd-1',
         identityPubB64: pub,
       );

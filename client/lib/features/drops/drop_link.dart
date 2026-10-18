@@ -51,10 +51,14 @@ import 'dart:typed_data';
 /// Build `https://<host>/#/drop/<id>?k=<identity_pub>`.
 ///
 /// [identityPubB64] must be the owner's own X25519 public key, read from
-/// this device. [shareUrlBase] is the bare host, not the `api.`
-/// subdomain — same reasoning as link mode.
+/// this device.
+///
+/// [appUrlBase] is where the WEB APP is served (`app.nduzem.com`), not
+/// `AppConfig.appUrlBase`. The share host is the bare marketing
+/// domain on purpose, and a drop link pointing there resolves to the
+/// marketing site and does nothing. That shipped: see AppConfig.
 String buildDropUploadUrl({
-  required Uri shareUrlBase,
+  required Uri appUrlBase,
   required String dropId,
   required String identityPubB64,
 }) {
@@ -79,10 +83,10 @@ String buildDropUploadUrl({
 
   // Everything after `#` is the client-side route plus its parameters.
   // The host part keeps any path the deployment is served under.
-  final trimmed = shareUrlBase.path.endsWith('/')
-      ? shareUrlBase.path.substring(0, shareUrlBase.path.length - 1)
-      : shareUrlBase.path;
-  final origin = shareUrlBase.replace(path: trimmed).toString();
+  final trimmed = appUrlBase.path.endsWith('/')
+      ? appUrlBase.path.substring(0, appUrlBase.path.length - 1)
+      : appUrlBase.path;
+  final origin = appUrlBase.replace(path: trimmed).toString();
   return '$origin/#/drop/$dropId?k=$k';
 }
 

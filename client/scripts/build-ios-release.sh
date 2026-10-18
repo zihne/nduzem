@@ -30,6 +30,9 @@
 # Usage:
 #   scripts/build-ios-release.sh [NDUZEM_API_BASE] [SHARE_URL_BASE]
 #
+# APP_URL_BASE is an env override only (default:
+# https://app.nduzem.com), matching build-release.sh.
+#
 # Or via env var:
 #   NDUZEM_API_BASE=https://api.nduzem.com scripts/build-ios-release.sh
 #
@@ -139,6 +142,26 @@ fi
 case "$SHARE_URL_BASE" in
     https://*|http://*) ;;
     *) fail "Share URL base must be a full URL. Got: $SHARE_URL_BASE" ;;
+esac
+
+# App URL base — where the Flutter web app is served, and the origin a
+# file-drop upload link must point at so it OPENS the app.
+#
+# This script was missing it entirely while build-release.sh and
+# build-web-release.sh had it, so an iOS release would have rebuilt the
+# bug those two were changed to fix: the upload link resolved to the
+# bare marketing host and did nothing. Three origins, and only two of
+# the three builds knew it.
+APP_URL_BASE="${APP_URL_BASE:-https://app.nduzem.com}"
+
+# No default-derivation for this one, deliberately. The share host comes
+# from stripping `api.` off the API host, but the app host cannot be
+# guessed that way — `app.` is a real subdomain choice, not a convention
+# — so it is an explicit constant with an env override, and a malformed
+# override must not be baked into a release.
+case "$APP_URL_BASE" in
+    https://*|http://*) ;;
+    *) fail "App URL base must be a full URL. Got: $APP_URL_BASE" ;;
 esac
 
 EXPORT_METHOD="${IOS_EXPORT_METHOD:-app-store}"
@@ -368,12 +391,14 @@ ok "tests pass"
 say "Building release IPA with:"
 say "  API base:   $API_BASE"
 say "  Share URL:  $SHARE_URL_BASE"
+say "  App URL:    $APP_URL_BASE"
 say "  Export:     ${EXPORT_PLIST:-$EXPORT_METHOD}"
 
 BUILD_ARGS=(
     --release
     --dart-define=NDUZEM_API_BASE="$API_BASE"
     --dart-define=NDUZEM_SHARE_URL_BASE="$SHARE_URL_BASE"
+    --dart-define=NDUZEM_APP_URL_BASE="$APP_URL_BASE"
 )
 if [[ -n "$EXPORT_PLIST" ]]; then
     [[ -f "$EXPORT_PLIST" ]] || fail "IOS_EXPORT_OPTIONS_PLIST does not exist: $EXPORT_PLIST"

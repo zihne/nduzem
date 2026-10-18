@@ -91,6 +91,12 @@ esac
 # derivation, so passing this arg explicitly is optional when the
 # `api.<host>` / `<host>` convention holds).
 SHARE_URL_BASE="${2:-${NDUZEM_SHARE_URL_BASE:-}}"
+# Where the web app is served. Distinct from SHARE_URL_BASE, which is
+# the bare marketing host on purpose (Android App Links, assetlinks,
+# readability). File-drop upload links must OPEN the app, and pointing
+# them at the marketing host shipped once: the link resolved to
+# nduzem.com and did nothing.
+APP_URL_BASE="${APP_URL_BASE:-https://app.nduzem.com}"
 if [[ -z "$SHARE_URL_BASE" ]]; then
     # Derive by stripping a leading `api.` from the URL's host.
     #
@@ -111,6 +117,16 @@ fi
 case "$SHARE_URL_BASE" in
     https://*|http://*) ;;
     *) fail "Share URL base must be a full URL. Got: $SHARE_URL_BASE" ;;
+esac
+
+# No default-derivation for this one, deliberately. The share host comes
+# from stripping `api.` off the API host, but the app host cannot be
+# guessed that way — `app.` is a real subdomain choice, not a convention
+# — so it is an explicit constant with an env override, and a malformed
+# override must not be baked into a release.
+case "$APP_URL_BASE" in
+    https://*|http://*) ;;
+    *) fail "App URL base must be a full URL. Got: $APP_URL_BASE" ;;
 esac
 
 # --- work from the client-repo root ----------------------------------
@@ -209,10 +225,12 @@ ok "tests pass"
 say "Building release AAB with:"
 say "  API base:   $API_BASE"
 say "  Share URL:  $SHARE_URL_BASE"
+say "  App URL:    $APP_URL_BASE"
 say "  Commit:     $GIT_COMMIT_SHORT"
 "${FLUTTER[@]}" build appbundle --release \
     --dart-define=NDUZEM_API_BASE="$API_BASE" \
     --dart-define=NDUZEM_SHARE_URL_BASE="$SHARE_URL_BASE" \
+    --dart-define=NDUZEM_APP_URL_BASE="$APP_URL_BASE" \
     --dart-define=NDUZEM_GIT_COMMIT="$GIT_COMMIT"
 
 AAB="$CLIENT_ROOT/build/app/outputs/bundle/release/app-release.aab"
@@ -318,6 +336,7 @@ printf '  Version:      %s (build %s)\n' "$VERSION_NAME" "$VERSION_CODE"
 printf '  Commit:       %s\n' "$GIT_COMMIT"
 printf '  API base:     %s\n' "$API_BASE"
 printf '  Share URL:    %s\n' "$SHARE_URL_BASE"
+printf '  App URL:      %s\n' "$APP_URL_BASE"
 [[ -n "${CERT_OWNER:-}" ]]  && printf '  Signed by:    %s\n' "$CERT_OWNER"
 [[ -n "${CERT_SHA256:-}" ]] && printf '  SHA-256:      %s\n' "$CERT_SHA256"
 echo
