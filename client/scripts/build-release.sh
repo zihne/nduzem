@@ -119,6 +119,16 @@ case "$SHARE_URL_BASE" in
     *) fail "Share URL base must be a full URL. Got: $SHARE_URL_BASE" ;;
 esac
 
+# No default-derivation for this one, deliberately. The share host comes
+# from stripping `api.` off the API host, but the app host cannot be
+# guessed that way — `app.` is a real subdomain choice, not a convention
+# — so it is an explicit constant with an env override, and a malformed
+# override must not be baked into a release.
+case "$APP_URL_BASE" in
+    https://*|http://*) ;;
+    *) fail "App URL base must be a full URL. Got: $APP_URL_BASE" ;;
+esac
+
 # --- work from the client-repo root ----------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLIENT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -215,6 +225,7 @@ ok "tests pass"
 say "Building release AAB with:"
 say "  API base:   $API_BASE"
 say "  Share URL:  $SHARE_URL_BASE"
+say "  App URL:    $APP_URL_BASE"
 say "  Commit:     $GIT_COMMIT_SHORT"
 "${FLUTTER[@]}" build appbundle --release \
     --dart-define=NDUZEM_API_BASE="$API_BASE" \
@@ -325,6 +336,7 @@ printf '  Version:      %s (build %s)\n' "$VERSION_NAME" "$VERSION_CODE"
 printf '  Commit:       %s\n' "$GIT_COMMIT"
 printf '  API base:     %s\n' "$API_BASE"
 printf '  Share URL:    %s\n' "$SHARE_URL_BASE"
+printf '  App URL:      %s\n' "$APP_URL_BASE"
 [[ -n "${CERT_OWNER:-}" ]]  && printf '  Signed by:    %s\n' "$CERT_OWNER"
 [[ -n "${CERT_SHA256:-}" ]] && printf '  SHA-256:      %s\n' "$CERT_SHA256"
 echo

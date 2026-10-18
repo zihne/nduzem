@@ -110,6 +110,16 @@ case "$SHARE_URL_BASE" in
     *) fail "Share URL base must be a full URL. Got: $SHARE_URL_BASE" ;;
 esac
 
+# No default-derivation for this one, deliberately. The share host comes
+# from stripping `api.` off the API host, but the app host cannot be
+# guessed that way — `app.` is a real subdomain choice, not a convention
+# — so it is an explicit constant with an env override, and a malformed
+# override must not be baked into a release.
+case "$APP_URL_BASE" in
+    https://*|http://*) ;;
+    *) fail "App URL base must be a full URL. Got: $APP_URL_BASE" ;;
+esac
+
 # --- work from the client-repo root ----------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLIENT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -152,6 +162,7 @@ ok "tests pass"
 say "Building release web bundle with:"
 say "  API base:   $API_BASE"
 say "  Share URL:  $SHARE_URL_BASE"
+say "  App URL:    $APP_URL_BASE"
 # --no-web-resources-cdn is NOT optional here.
 #
 # By default Flutter loads CanvasKit from www.gstatic.com and the Roboto
@@ -214,6 +225,7 @@ printf '  Path:         %s\n' "$BUNDLE_DIR"
 printf '  Size:         %s (%s files)\n' "$BUNDLE_SIZE" "$FILE_COUNT"
 printf '  API base:     %s\n' "$API_BASE"
 printf '  Share URL:    %s\n' "$SHARE_URL_BASE"
+printf '  App URL:      %s\n' "$APP_URL_BASE"
 [[ -n "$MAIN_JS" ]] && printf '  Entrypoint:   %s\n' "$MAIN_JS"
 echo
 echo "Next steps:"
