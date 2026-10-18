@@ -20,7 +20,7 @@
 # non-zero exit is a hard failure with a message on stderr.
 #
 # Usage:
-#   scripts/build-web-release.sh [NDUZEM_API_BASE] [NDUZEM_SHARE_URL_BASE]
+#   scripts/build-web-release.sh [API_BASE] [SHARE_URL_BASE] [APP_URL_BASE]
 #
 # Or via env var:
 #   NDUZEM_API_BASE=https://api.nduzem.com scripts/build-web-release.sh
@@ -62,7 +62,7 @@ if [[ -z "$API_BASE" ]]; then
     fail "NDUZEM_API_BASE is required.
 
 Usage:
-  scripts/build-web-release.sh https://api.nduzem.com [https://nduzem.com]
+  scripts/build-web-release.sh https://api.nduzem.com [https://nduzem.com] [https://app.nduzem.com]
 
 Or:
   export NDUZEM_API_BASE=https://api.nduzem.com
@@ -83,7 +83,24 @@ SHARE_URL_BASE="${2:-${NDUZEM_SHARE_URL_BASE:-}}"
 # readability). File-drop upload links must OPEN the app, and pointing
 # them at the marketing host shipped once: the link resolved to
 # nduzem.com and did nothing.
-APP_URL_BASE="${APP_URL_BASE:-https://app.nduzem.com}"
+# Third positional, after the API base and the share URL. The env var
+# is `NDUZEM_APP_URL_BASE`, matching the other two and matching the
+# dart-define name — bare `APP_URL_BASE` is still honoured because the
+# first version of this only accepted that, but it is not the spelling
+# to use. Taking the three in the same order everywhere means the
+# command can be copied between the Android, web and iOS scripts.
+#
+# Unlike the share URL there is no derivation to fall back on: the share
+# host comes from stripping `api.` off the API host, but `app.` is a
+# real subdomain choice rather than a convention, so this is an explicit
+# default.
+APP_URL_BASE="${3:-${NDUZEM_APP_URL_BASE:-${APP_URL_BASE:-https://app.nduzem.com}}}"
+
+# A malformed override must not be baked into a release.
+case "$APP_URL_BASE" in
+    https://*|http://*) ;;
+    *) fail "App URL base must be a full URL. Got: $APP_URL_BASE" ;;
+esac
 if [[ -z "$SHARE_URL_BASE" ]]; then
     # Derive by stripping a leading `api.` from the URL's host.
     #
@@ -108,16 +125,6 @@ fi
 case "$SHARE_URL_BASE" in
     https://*|http://*) ;;
     *) fail "Share URL base must be a full URL. Got: $SHARE_URL_BASE" ;;
-esac
-
-# No default-derivation for this one, deliberately. The share host comes
-# from stripping `api.` off the API host, but the app host cannot be
-# guessed that way — `app.` is a real subdomain choice, not a convention
-# — so it is an explicit constant with an env override, and a malformed
-# override must not be baked into a release.
-case "$APP_URL_BASE" in
-    https://*|http://*) ;;
-    *) fail "App URL base must be a full URL. Got: $APP_URL_BASE" ;;
 esac
 
 # --- work from the client-repo root ----------------------------------
