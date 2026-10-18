@@ -6,7 +6,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../api/api_client.dart';
 import '../../api/drop_uploads_api.dart';
+import '../../core/external_launcher.dart';
 import '../../widgets/max_width_content.dart';
+import '../../widgets/nduzem_mark.dart';
 import '../auth/auth_providers.dart';
 import '../transfers/picked_file.dart';
 import '../transfers/web_file_picker.dart';
@@ -277,11 +279,30 @@ class _DropUploadScreenState extends ConsumerState<DropUploadScreen> {
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
     return Scaffold(
-      appBar: AppBar(title: const Text('Send a file')),
+      // The brand identifies the page, not the task.
+      //
+      // Whoever opens this link was asked for a file by someone they
+      // know, and has usually never heard of us. "Send a file" as the
+      // only chrome tells them nothing about whose page they are
+      // typing a password into — which is both a trust problem and a
+      // wasted introduction, since this page and the receive page are
+      // the only places a stranger meets the product. The task moves
+      // into the body, where there is room to say it properly.
+      appBar: AppBar(title: const NduzemWordmark()),
       body: MaxWidthContent(
         child: Padding(
           padding: const EdgeInsets.all(20),
-          child: _body(text),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(child: _body(text)),
+              // Outside `_body` so it also shows on the error and
+              // success states. The success state is the better of the
+              // two moments to introduce ourselves: they have just
+              // watched it work.
+              const _WhatIsThis(),
+            ],
+          ),
         ),
       ),
     );
@@ -325,6 +346,8 @@ class _DropUploadScreenState extends ConsumerState<DropUploadScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Text('Send a file', style: text.headlineSmall),
+          const SizedBox(height: 8),
           Text(
             'Your file is encrypted in this browser before it is uploaded. '
             'Only the person who gave you this link can open it.',
@@ -480,6 +503,57 @@ class _DropUploadScreenState extends ConsumerState<DropUploadScreen> {
               ),
             ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+/// The one acquisition line on this page.
+///
+/// A logo alone does not tell a stranger what this is, and this page
+/// plus the receive page are the only surfaces where someone who is not
+/// a user ever sees the product. Kept to a single sentence and a link:
+/// the person is in the middle of doing a favour for somebody, and a
+/// pitch competing with the Send button would be both rude and
+/// counterproductive.
+///
+/// Opens in a new tab, so a half-finished upload is not navigated away
+/// from.
+class _WhatIsThis extends ConsumerWidget {
+  const _WhatIsThis();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    return Padding(
+      padding: const EdgeInsets.only(top: 16),
+      child: Column(
+        children: [
+          Divider(color: scheme.outlineVariant),
+          const SizedBox(height: 8),
+          Text(
+            'Nduzem sends files end-to-end encrypted. We cannot read them.',
+            textAlign: TextAlign.center,
+            style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+          ),
+          TextButton(
+            onPressed: () async {
+              // shareUrlBase, NOT appUrlBase: this goes to the
+              // marketing site on the bare host, not to the web app.
+              // The three origins again.
+              final uri = ref.read(appConfigProvider).shareUrlBase;
+              final result = await launchExternalUri(uri);
+              if (result == ExternalLaunchResult.noHandler &&
+                  context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Open this in a browser: $uri')),
+                );
+              }
+            },
+            child: const Text('What is Nduzem?'),
+          ),
         ],
       ),
     );
