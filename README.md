@@ -72,8 +72,11 @@ the published manifest. Any divergence is reported.
 ## License
 
 Client source (this repository): **Apache-2.0**, see
-[LICENSE-client.md](LICENSE-client.md). The Apache patent grant covers
-contributors and downstream users.
+[LICENSE](LICENSE). The Apache patent grant covers contributors and
+downstream users.
+
+Third-party attribution is in [NOTICE](NOTICE) - currently the vendored
+`client/web/sodium.js`, whose own licence header minification strips.
 
 The Nduzem backend is proprietary and lives in a separate, private
 repository.
