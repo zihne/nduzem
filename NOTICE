@@ -1,0 +1,25 @@
+Nduzem client
+Copyright 2023-2026 Zihne Ltd
+
+Licensed under the Apache License, Version 2.0. See LICENSE.
+
+--------------------------------------------------------------------
+Third-party components
+--------------------------------------------------------------------
+
+client/web/sodium.js
+
+    libsodium.js - a JavaScript/WebAssembly build of libsodium.
+    Copyright (c) Frank Denis and the libsodium.js contributors.
+    Licensed under the ISC License.
+    https://github.com/jedisct1/libsodium.js
+
+    Vendored rather than loaded from a CDN on purpose: the browser
+    client performs the decryption, so no third-party origin may enter
+    the security-critical trust set. The file is the upstream minified
+    build, unmodified. Minification strips the upstream licence header,
+    which is why the attribution lives here instead.
+
+Dart and Flutter package dependencies are resolved by `pub` and are not
+vendored in this repository. Their licences are recorded in
+`client/pubspec.lock` and in the local pub cache.
