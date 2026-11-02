@@ -20,6 +20,24 @@ import 'package:web/web.dart' as web;
 /// Returns a short human-readable label of where the file went
 /// (the FSA-picked name or the fallback filename), or `null` when
 /// the user cancelled the FSA picker. Any other failure throws.
+/// Whether this browser will ASK the user where to put the file.
+///
+/// True on Chromium (File System Access). False on Safari and Firefox,
+/// which have no `showSaveFilePicker`, so the save goes through the
+/// `<a download>` fallback and the browser drops the file into its own
+/// downloads folder with no prompt.
+///
+/// The UI needs this before the save, not after. A button labelled
+/// "Save to..." on a browser that will never ask is a promise the
+/// browser does not keep, and the user is left looking for a dialog
+/// that is not coming — which is exactly how this was reported.
+///
+/// Uses `in` semantics (`JSObject.hasProperty` is documented as
+/// "Uses JavaScript's `in` to check"), so a method inherited from
+/// `Window.prototype` is found. `hasOwnProperty` would not find it and
+/// would make every browser look like Safari.
+bool get webSaveAsksForLocation => web.window.has('showSaveFilePicker');
+
 Future<String?> saveBytesWeb({
   required Uint8List bytes,
   required String filename,
