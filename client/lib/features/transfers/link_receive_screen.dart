@@ -19,6 +19,7 @@ import '../auth/auth_providers.dart';
 import '../history/transfer_history_entry.dart';
 import '../history/transfer_history_provider.dart';
 import 'transfer_service.dart';
+import 'save_destination.dart';
 import 'web_saver.dart';
 import '../../widgets/max_width_content.dart';
 
@@ -604,12 +605,19 @@ class _LinkReceiveScreenState extends ConsumerState<LinkReceiveScreen> {
               if (_savedPath != null) ...[
                 const SizedBox(height: 8),
                 SelectableText(
-                  _savedPath!,
+                  saveOutcomeDescription(_savedPath!),
                   style: const TextStyle(
                     fontFamily: 'monospace',
                     fontSize: 12,
                   ),
                 ),
+                if (saveOutcomeHint != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    saveOutcomeHint!,
+                    style: const TextStyle(fontSize: 11),
+                  ),
+                ],
               ],
             ],
           ),
@@ -640,7 +648,7 @@ class _LinkReceiveScreenState extends ConsumerState<LinkReceiveScreen> {
                   width: 20,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
-              : const Text('Save to...'),
+              : Text(saveButtonLabel),
         )
       else if (!_acked)
         FilledButton.icon(
